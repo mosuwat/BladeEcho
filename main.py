@@ -2,19 +2,25 @@ import pygame
 import sys
 import os
 from constants import SCREEN_W, SCREEN_H, ROOM_W, ROOM_H, STEP_X, STEP_Y, \
-                      WALL_T, DOOR_SIZE, BG_COLOR, FPS
+                      WALL_T, DOOR_SIZE, HALLWAY_LEN, BG_COLOR, FPS
 from map_generator import generate_map
-from room import FLOOR_COLOR, WALL_COLOR
+
 from player import Player
 from world import finalize_map, get_camera, current_room, resolve_walls
 import minimap
 import damage_number
+import tilemap as tilemap_mod
 from shop import Shop
 from save import SAVE_PATH, save_exists, write_save, load_game
-from ui import Button, make_menu_buttons
+from ui import Button, make_menu_buttons, draw_hud, draw_boss_bar, \
+               update_notifications, draw_notifications
 
 pygame.init()
 screen  = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+
+_IMG_DIR      = os.path.join(os.path.dirname(__file__), 'images')
+_hallway_h    = tilemap_mod.load(os.path.join(_IMG_DIR, 'hallway.tmx'))
+_hallway_v    = tilemap_mod.load(os.path.join(_IMG_DIR, 'hallwayUp.tmx'))
 pygame.display.set_caption("Blade Echo")
 clock   = pygame.time.Clock()
 font_sm = pygame.font.SysFont(None, 20)
@@ -44,13 +50,13 @@ def _build_level():
         wx = room.grid_x * STEP_X
         wy = room.grid_y * STEP_Y
         room.setup_geometry(wx, wy, ROOM_W, ROOM_H, WALL_T, DOOR_SIZE)
-        if room.event_type in ('monster', 'boss'):
+        if room.event_type in ('monster', 'boss', 'item'):
             room.spawn_event(wx, wy, ROOM_W, ROOM_H, floor_number=level_number())
         elif room.event_type == 'exit':
             room.place_gate()
         elif room.event_type == 'shop':
             room.shop = Shop(floor_num)
-    hallway_floors, hall_walls, all_walls = finalize_map(rooms)
+    hallway_floors, hall_walls, all_walls = finalize_map(rooms, _hallway_h, _hallway_v)
 
 
 def init_game():
@@ -135,6 +141,12 @@ while running:
                 elif event.key == pygame.K_F1:
                     advance_level()
                     break
+                elif event.key == pygame.K_F2 and sublevel == 3:
+                    boss_room = next((r for r in rooms if r.is_boss), None)
+                    if boss_room:
+                        player.x = boss_room.wx + ROOM_W // 2 - 16
+                        player.y = boss_room.wy + ROOM_H // 2 - 16
+                        player.rect.topleft = (int(player.x), int(player.y))
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if menu_btn_ig.is_clicked(event):
                     write_save(player, rooms, floor_num, sublevel)
@@ -179,6 +191,7 @@ while running:
     resolve_walls(player, active_walls)
     player.update(dt)
     damage_number.update_all(dt)
+    update_notifications(dt)
     cam_x, cam_y = get_camera(player, SCREEN_W, SCREEN_H)
 
     if player.hp <= 0:
@@ -196,35 +209,31 @@ while running:
     # ── Playing draw ──────────────────────────────────────────────────────
     screen.fill(BG_COLOR)
 
-    for f in hallway_floors:
-        pygame.draw.rect(screen, FLOOR_COLOR,
-                         (f.x - cam_x, f.y - cam_y, f.width, f.height))
+    for hx, hy, tmx, door_rooms in hallway_floors:
+        horizontal = (tmx is _hallway_h)
+        nw = HALLWAY_LEN if horizontal else DOOR_SIZE
+        nh = DOOR_SIZE   if horizontal else HALLWAY_LEN
+        skip = tuple(door_rooms.keys())
+        screen.blit(tmx.render(nw, nh, skip_layers=skip), (hx - cam_x, hy - cam_y))
+        for layer, ctrl_room in door_rooms.items():
+            if ctrl_room and ctrl_room.is_locked:
+                screen.blit(tmx.render_layer(layer, nw, nh), (hx - cam_x, hy - cam_y))
 
     for room in rooms:
-        room.draw(screen, cam_x, cam_y, font_sm)
-
-    for w in hall_walls:
-        pygame.draw.rect(screen, WALL_COLOR,
-                         (w.x - cam_x, w.y - cam_y, w.width, w.height))
+        room.draw(screen, cam_x, cam_y)
 
     for bullet in player.deflected_bullets:
         bullet.draw(screen, cam_x, cam_y)
 
     player.draw(screen, cam_x, cam_y)
     damage_number.draw_all(screen, font_sm, cam_x, cam_y)
+    draw_notifications(screen, font_md, font_sm)
 
-    if cur_room:
-        tag  = ' [START]' if cur_room.is_start else (' [BOSS]' if cur_room.is_boss else '')
-        info = font_md.render(f"Room: {cur_room.event_type}{tag}", True, (220, 220, 220))
-    else:
-        info = font_md.render("Hallway", True, (160, 160, 160))
-    screen.blit(info, (8, 8))
-    screen.blit(font_md.render(f"HP: {player.hp}",       True, (220, 80, 80)),  (8, 28))
-    screen.blit(font_md.render(f"Coins: {player.coins}", True, (255, 215, 0)),  (8, 48))
-    screen.blit(font_md.render(f"Floor {floor_num}  –  Sub-level {sublevel}/3",
-                               True, (180, 180, 220)), (8, 68))
-
+    draw_hud(screen, player, cur_room, floor_num, sublevel, font_md)
     menu_btn_ig.draw(screen)
+
+    if cur_room and cur_room.is_boss and cur_room.enemies:
+        draw_boss_bar(screen, cur_room.enemies[0], font_sm)
 
     if show_map:
         minimap.draw(screen, rooms, cur_room, font_md)

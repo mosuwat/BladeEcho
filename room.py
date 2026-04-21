@@ -1,21 +1,33 @@
 import pygame
 import random
+import os
 from enemy import RangedEnemy, MeleeEnemy
+from boss import SlimeKing
 from coin import Coin
 from gate import Gate
-
 import damage_number
+import tilemap as tilemap_mod
+from shop import make_floor_items, RARITY_COLOR
+from ui import notify_item
+
+_TMX_DIR  = os.path.join(os.path.dirname(__file__), 'images')
+_ROOM_TMX = None   # loaded lazily after pygame.init()
+
+def _get_room_tmx():
+    global _ROOM_TMX
+    if _ROOM_TMX is None:
+        _ROOM_TMX = tilemap_mod.load(os.path.join(_TMX_DIR, 'map.tmx'))
+    return _ROOM_TMX
 
 EVENT_WEIGHTS = {
-    'monster': 60,
-    'item':    20,
+    'monster': 70,
+    'item':    10,
     'shop':    15,
     'special': 5,
 }
 
 FLOOR_COLOR = (45, 45, 50)
 WALL_COLOR  = (80, 80, 120)
-LOCK_COLOR  = (140, 40, 40)
 
 
 class Room:
@@ -103,22 +115,25 @@ class Room:
 
         return walls
 
+    _DIR_LAYERS = {
+        (0, -1): ('DoorsTop',    'WallsTop'),
+        (0,  1): ('DoorsBottom', 'WallsBottom'),
+        (-1, 0): ('DoorsLeft',   'WallsLeft'),
+        (1,  0): ('DoorsRight',  'WallsRight'),
+    }
+
+    def _conn_layer(self, nx, ny):
+        entry = self._DIR_LAYERS.get((nx - self.grid_x, ny - self.grid_y))
+        return entry[0] if entry else None
+
     def _build_lock_walls(self):
-        wx, wy = self.wx, self.wy
-        mx = wx + self.room_w // 2
-        my = wy + self.room_h // 2
-        d  = self.door_size // 2
-        t  = self.wall_t
+        tmx   = _get_room_tmx()
         walls = []
         for nx, ny in self.connections:
-            if   nx == self.grid_x and ny == self.grid_y - 1:
-                walls.append(pygame.Rect(mx - d, wy, self.door_size, t))
-            elif nx == self.grid_x and ny == self.grid_y + 1:
-                walls.append(pygame.Rect(mx - d, wy + self.room_h - t, self.door_size, t))
-            elif nx == self.grid_x - 1 and ny == self.grid_y:
-                walls.append(pygame.Rect(wx, my - d, t, self.door_size))
-            elif nx == self.grid_x + 1 and ny == self.grid_y:
-                walls.append(pygame.Rect(wx + self.room_w - t, my - d, t, self.door_size))
+            layer = self._conn_layer(nx, ny)
+            if layer:
+                walls += tmx.tile_rects(layer, self.wx, self.wy,
+                                        self.room_w, self.room_h)
         return walls
 
     # ------------------------------------------------------------------
@@ -139,6 +154,10 @@ class Room:
             self._spawn_enemies(wx, wy, room_w, room_h, floor_number)
         elif self.event_type == 'boss':
             self._spawn_boss(wx, wy, room_w, room_h, floor_number)
+        elif self.event_type == 'item':
+            cx = wx + room_w // 2
+            cy = wy + room_h // 2
+            self.items.extend(make_floor_items(cx, cy, floor_number, count=1))
 
     def _spawn_enemies(self, wx, wy, room_w, room_h, floor_number):
         margin = 100
@@ -149,9 +168,9 @@ class Room:
             self.enemies.append(cls(ex, ey, floor_number))
 
     def _spawn_boss(self, wx, wy, room_w, room_h, floor_number):
-        self.enemies.append(RangedEnemy(wx + room_w // 2 - 16,
-                                        wy + room_h // 2 - 16,
-                                        floor_number))
+        self.enemies.append(SlimeKing(wx + room_w // 2 - SlimeKing.SIZE // 2,
+                                      wy + room_h // 2 - SlimeKing.SIZE // 2,
+                                      floor_number))
 
     # ------------------------------------------------------------------
     # State
@@ -161,7 +180,7 @@ class Room:
         """Lock the room once the player's full body is past the doorway threshold."""
         if self.is_cleared or self.is_locked or self.event_type not in ('monster', 'boss'):
             return
-        margin = self.wall_t + 8
+        margin = self.wall_t + 36
         if (player_rect.left   >= self.wx + margin and
                 player_rect.right  <= self.wx + self.room_w - margin and
                 player_rect.top    >= self.wy + margin and
@@ -192,6 +211,13 @@ class Room:
             else:
                 remaining.append(coin)
         self.floor_coins = remaining
+
+        for item in self.items:
+            if not item.collected and item.rect.colliderect(player.rect):
+                item.apply(player)
+                notify_item(item.name, item.rarity,
+                            RARITY_COLOR.get(item.rarity, (200, 200, 200)))
+        self.items = [i for i in self.items if not i.collected]
 
         if not self.is_locked:
             return
@@ -232,10 +258,12 @@ class Room:
                 if player.try_parry_bullet(bullet):
                     continue
                 if bullet.rect.colliderect(player.rect):
-                    player.hp -= bullet.damage
                     bullet.alive = False
-                    damage_number.spawn(player.x + 16, player.y - 8,
-                                        bullet.damage, damage_number.PLAYER_HIT_COLOR)
+                    if player.invulnerable_timer <= 0:
+                        dealt = max(1, bullet.damage - getattr(player, 'defense', 0))
+                        player.hp -= dealt
+                        damage_number.spawn(player.x + 16, player.y - 8,
+                                            dealt, damage_number.PLAYER_HIT_COLOR)
 
         # Player's deflected bullets → update + enemy damage
         for bullet in player.deflected_bullets:
@@ -245,10 +273,7 @@ class Room:
                 continue
             for enemy in self.enemies:
                 if bullet.rect.colliderect(enemy.rect):
-                    if isinstance(enemy, RangedEnemy):
-                        dealt = enemy.take_damage(enemy.hp)
-                    else:
-                        dealt = enemy.take_damage(enemy.max_hp // 2)
+                    dealt = enemy.take_damage(bullet.damage)
                     damage_number.spawn(enemy.x + 16, enemy.y - 8, dealt)
                     bullet.alive = False
                     break
@@ -261,29 +286,32 @@ class Room:
     # Draw
     # ------------------------------------------------------------------
 
-    def draw(self, screen, cam_x, cam_y, font):
+    def draw(self, screen, cam_x, cam_y):
         sx = self.wx - cam_x
         sy = self.wy - cam_y
         sw, sh = screen.get_size()
         if sx + self.room_w < 0 or sx > sw or sy + self.room_h < 0 or sy > sh:
             return
 
-        pygame.draw.rect(screen, FLOOR_COLOR, (sx, sy, self.room_w, self.room_h))
-        label = font.render(f"{self.event_type} ({self.grid_x},{self.grid_y})",
-                            True, (110, 110, 110))
-        screen.blit(label, (sx + self.wall_t + 4, sy + self.wall_t + 4))
+        _SKIP = ('DoorsTop', 'DoorsBottom', 'DoorsLeft', 'DoorsRight',
+                 'WallsTop', 'WallsBottom', 'WallsLeft', 'WallsRight')
+        tmx = _get_room_tmx()
+        screen.blit(tmx.render(self.room_w, self.room_h, skip_layers=_SKIP), (sx, sy))
 
-        for w in self.walls:
-            pygame.draw.rect(screen, WALL_COLOR,
-                             (w.x - cam_x, w.y - cam_y, w.width, w.height))
+        connected = {(nx - self.grid_x, ny - self.grid_y) for nx, ny in self.connections}
+        for offset, (door_layer, wall_layer) in self._DIR_LAYERS.items():
+            if offset in connected:
+                if self.is_locked:
+                    screen.blit(tmx.render_layer(door_layer, self.room_w, self.room_h), (sx, sy))
+            else:
+                screen.blit(tmx.render_layer(wall_layer, self.room_w, self.room_h), (sx, sy))
 
-        if self.is_locked:
-            for w in self.lock_walls:
-                pygame.draw.rect(screen, LOCK_COLOR,
-                                 (w.x - cam_x, w.y - cam_y, w.width, w.height))
 
         for coin in self.floor_coins:
             coin.draw(screen, cam_x, cam_y)
+
+        for item in self.items:
+            item.draw(screen, cam_x, cam_y)
 
         if self.gate:
             self.gate.draw(screen, cam_x, cam_y)

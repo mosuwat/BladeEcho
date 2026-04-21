@@ -1,8 +1,11 @@
 import pygame
 import math
 import os
+import tilemap as tilemap_mod
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+_SWORD_TMX = os.path.join(BASE_DIR, 'images', 'weapon', 'sword.tmx')
+_SCALE     = 2
 
 
 class Sword:
@@ -22,10 +25,10 @@ class Sword:
         self.swing_start_angle = 0.0
         self.hit_this_swing   = set()   # enemy ids already hit in this swing
 
-        # Load placeholder image, scale to sword proportions (reach × 14 px)
-        path = os.path.join(BASE_DIR, 'images', 'placeholder.png')
-        raw  = pygame.image.load(path).convert_alpha()
-        self.image = pygame.transform.scale(raw, (self.reach, 14))
+        frame = tilemap_mod.load(_SWORD_TMX).get_frames(frame_tile_w=1)[0]
+        scaled = pygame.transform.scale(frame, (frame.get_width() * _SCALE,
+                                                frame.get_height() * _SCALE))
+        self.image = pygame.transform.flip(pygame.transform.rotate(scaled, 90), True, True)
 
     # ------------------------------------------------------------------
     # API

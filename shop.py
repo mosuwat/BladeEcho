@@ -1,6 +1,8 @@
 import pygame
 import random
+import math
 from constants import SCREEN_W, SCREEN_H
+from ui import notify_item
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 CARD_W   = 160
@@ -71,6 +73,11 @@ def _make_pool():
                  lambda p: p.sword.upgrade(damage_bonus=0, reach_bonus=15),
                  rarity='common'),
 
+        ShopItem("+20 Max HP", "Increase maximum health by 20.", 5,
+                 lambda p: (setattr(p, 'max_hp', p.max_hp + 20),
+                            setattr(p, 'hp',     p.hp     + 20)),
+                 rarity='common'),
+
         # rare ────────────────────────────────────────────────────────────
         ShopItem("Wider Parry",    "Parry window lasts 50 ms longer.", 5,
                  lambda p: setattr(p, 'parry_window',
@@ -84,6 +91,10 @@ def _make_pool():
         ShopItem("Parry Weaken +", "Weakened enemies take 20% more bonus damage.", 6,
                  lambda p: setattr(p, 'parry_dmg_mult',
                                    round(p.parry_dmg_mult + 0.2, 2)),
+                 rarity='rare'),
+
+        ShopItem("Iron Skin", "Reduce all incoming damage by 3.", 7,
+                 lambda p: setattr(p, 'defense', getattr(p, 'defense', 0) + 3),
                  rarity='rare'),
 
         # epic ────────────────────────────────────────────────────────────
@@ -101,16 +112,19 @@ def _make_pool():
                  lambda p: setattr(p, 'parry_instakill', True),
                  rarity='legendary', max_uses=1),
 
-        ShopItem("Flame Blade",  "Hits ignite the enemy; 3 dmg/s for 3 s.", 12,
-                 lambda p: setattr(p.sword, 'flame', True),
-                 rarity='legendary', max_uses=1),
-
-        ShopItem("Frost Blade",  "Hits slow the enemy by 50% for 2 s.", 12,
-                 lambda p: setattr(p.sword, 'slow', True),
-                 rarity='legendary', max_uses=1),
-
         ShopItem("Execute",      "Instantly kill enemies below 20% HP on sword hit.", 13,
                  lambda p: setattr(p.sword, 'execute_pct', 0.20),
+                 rarity='epic', max_uses=1),
+
+        # legendary ───────────────────────────────────────────────────────
+        ShopItem("Flame Blade",  "Hits ignite enemies. Replaces Frost Blade.", 12,
+                 lambda p: (setattr(p.sword, 'flame', True),
+                            setattr(p.sword, 'slow',  False)),
+                 rarity='legendary', max_uses=1),
+
+        ShopItem("Frost Blade",  "Hits slow enemies. Replaces Flame Blade.", 12,
+                 lambda p: (setattr(p.sword, 'slow',  True),
+                            setattr(p.sword, 'flame', False)),
                  rarity='legendary', max_uses=1),
     ]
 
@@ -148,7 +162,10 @@ class Shop:
             return
         for i, rect in enumerate(self._rects):
             if rect.collidepoint(pos):
-                self._items[i].buy(player)
+                item = self._items[i]
+                if item.buy(player):
+                    notify_item(item.name, item.rarity,
+                                RARITY_COLOR.get(item.rarity, (200, 200, 200)))
 
     def draw(self, screen):
         if not self.open:
@@ -226,3 +243,60 @@ class Shop:
         if line:
             surf = self._font_desc.render(' '.join(line), True, (180, 180, 200))
             screen.blit(surf, surf.get_rect(centerx=cx, y=y))
+
+
+# ── Floor item (item rooms) ───────────────────────────────────────────────────
+
+class FloorItem:
+    SIZE = 26
+    _font = None
+
+    def __init__(self, x, y, shop_item):
+        self._item     = shop_item
+        self.x, self.y = x, y
+        self.rect      = pygame.Rect(x - self.SIZE // 2, y - self.SIZE // 2,
+                                     self.SIZE, self.SIZE)
+        self.collected = False
+
+    @property
+    def name(self):   return self._item.name
+    @property
+    def rarity(self): return self._item.rarity
+
+    def apply(self, player):
+        self._item._effect(player)
+        self.collected = True
+
+    def draw(self, screen, cam_x, cam_y):
+        if self.collected:
+            return
+        if FloorItem._font is None:
+            FloorItem._font = pygame.font.SysFont(None, 17)
+        sx = int(self.x - cam_x)
+        sy = int(self.y - cam_y)
+        col = RARITY_COLOR.get(self._item.rarity, (200, 200, 200))
+        pulse = 0.6 + 0.4 * math.sin(pygame.time.get_ticks() / 300)
+        glow_col = tuple(int(c * pulse) for c in col)
+        pygame.draw.rect(screen, (30, 30, 40),
+                         (sx - self.SIZE // 2, sy - self.SIZE // 2, self.SIZE, self.SIZE),
+                         border_radius=5)
+        pygame.draw.rect(screen, glow_col,
+                         (sx - self.SIZE // 2, sy - self.SIZE // 2, self.SIZE, self.SIZE),
+                         2, border_radius=5)
+        label = FloorItem._font.render(self._item.name, True, col)
+        screen.blit(label, label.get_rect(centerx=sx, bottom=sy - self.SIZE // 2 - 2))
+
+
+def _pick_floor_item(x, y, floor_num):
+    w_map   = RARITY_WEIGHT_BY_FLOOR.get(floor_num, RARITY_WEIGHT_BY_FLOOR[1])
+    pool    = _make_pool()
+    weights = [w_map[item.rarity] for item in pool]
+    picked  = random.choices(pool, weights=weights, k=1)[0]
+    return FloorItem(x, y, picked)
+
+
+def make_floor_items(cx, cy, floor_num, count=1):
+    spread = 48
+    xs = [cx] if count == 1 else [cx - spread * i + spread * (count - 1) // 2
+                                   for i in range(count)]
+    return [_pick_floor_item(x, cy, floor_num) for x in xs]

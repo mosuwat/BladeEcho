@@ -1,10 +1,15 @@
-import pygame
-from constants import ROOM_W, ROOM_H, HALLWAY_LEN, WALL_T, DOOR_SIZE
+from constants import ROOM_W, ROOM_H, DOOR_SIZE, HALLWAY_LEN
 
 
-def build_hallways(rooms):
-    floors, walls = [], []
+def build_hallways(rooms, tmx_h, tmx_v):
+    """Return (hallways, hall_walls).
+    hallways  — list of (x, y, tmx, door_rooms) for drawing
+                door_rooms: dict of layer_name → room whose lock state controls it
+    hall_walls — collision rects from each TMX Walls layer
+    """
+    hallways, hall_walls = [], []
     seen = set()
+    room_at = {(r.grid_x, r.grid_y): r for r in rooms}
     for room in rooms:
         mx = room.wx + ROOM_W // 2
         my = room.wy + ROOM_H // 2
@@ -15,23 +20,23 @@ def build_hallways(rooms):
                 continue
             if nx == room.grid_x + 1 and ny == room.grid_y:
                 seen.add(pair)
-                hx = room.wx + ROOM_W
-                floors.append(pygame.Rect(hx, my - d, HALLWAY_LEN, DOOR_SIZE))
-                walls += [pygame.Rect(hx, my - d - WALL_T, HALLWAY_LEN, WALL_T),
-                          pygame.Rect(hx, my + d,           HALLWAY_LEN, WALL_T)]
+                hx, hy = room.wx + ROOM_W, my - d
+                hallways.append((hx, hy, tmx_h, {}))
+                hall_walls += tmx_h.tile_rects('Walls', hx, hy, HALLWAY_LEN, DOOR_SIZE)
             elif ny == room.grid_y + 1 and nx == room.grid_x:
                 seen.add(pair)
-                hy = room.wy + ROOM_H
-                floors.append(pygame.Rect(mx - d, hy, DOOR_SIZE, HALLWAY_LEN))
-                walls += [pygame.Rect(mx - d - WALL_T, hy, WALL_T, HALLWAY_LEN),
-                          pygame.Rect(mx + d,           hy, WALL_T, HALLWAY_LEN)]
-    return floors, walls
+                hx, hy = mx - d, room.wy + ROOM_H
+                other = room_at.get((nx, ny))
+                door_rooms = {'DoorsTop': room, 'DoorsBottom': other}
+                hallways.append((hx, hy, tmx_v, door_rooms))
+                hall_walls += tmx_v.tile_rects('Walls', hx, hy, DOOR_SIZE, HALLWAY_LEN)
+    return hallways, hall_walls
 
 
-def finalize_map(rooms):
-    hallway_floors, hall_walls = build_hallways(rooms)
+def finalize_map(rooms, tmx_h, tmx_v):
+    hallways, hall_walls = build_hallways(rooms, tmx_h, tmx_v)
     all_walls = [w for r in rooms for w in r.walls] + hall_walls
-    return hallway_floors, hall_walls, all_walls
+    return hallways, hall_walls, all_walls
 
 
 def get_camera(player, screen_w, screen_h):

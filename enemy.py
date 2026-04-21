@@ -1,7 +1,42 @@
 import pygame
 import math
 import random
+import os
+import tilemap as tilemap_mod
 import damage_number
+
+_ENEMY_IMG_DIR   = os.path.join(os.path.dirname(__file__), 'images', 'Enemy')
+_SLIME_FRAMES    = None
+_SKELETON_FRAMES = None   # {'idle': [...], 'run': [...]}
+
+
+def _get_slime_frames():
+    global _SLIME_FRAMES
+    if _SLIME_FRAMES is None:
+        tmx = tilemap_mod.load(os.path.join(_ENEMY_IMG_DIR, 'Slime', 'idle.tmx'))
+        raw = tmx.get_frames(frame_tile_w=1)
+        _SLIME_FRAMES = [pygame.transform.scale(f, (f.get_width() * 2, f.get_height() * 2))
+                         for f in raw]
+    return _SLIME_FRAMES
+
+
+def _sheet_frames(path, frame_w, frame_h):
+    sheet = pygame.image.load(path).convert_alpha()
+    cols  = sheet.get_width()  // frame_w
+    rows  = sheet.get_height() // frame_h
+    return [sheet.subsurface(c * frame_w, r * frame_h, frame_w, frame_h)
+            for r in range(rows) for c in range(cols)]
+
+
+def _get_skeleton_frames():
+    global _SKELETON_FRAMES
+    if _SKELETON_FRAMES is None:
+        base  = os.path.join(_ENEMY_IMG_DIR, 'Skeleton - Base')
+        idle  = [pygame.transform.scale(f, (64, 64))
+                 for f in _sheet_frames(os.path.join(base, 'Idle', 'Idle-Sheet.png'), 32, 32)]
+        run   = _sheet_frames(os.path.join(base, 'Run',  'Run-Sheet.png'),  64, 64)
+        _SKELETON_FRAMES = {'idle': idle, 'run': run}
+    return _SKELETON_FRAMES
 
 
 class Bullet:
@@ -34,7 +69,10 @@ class Bullet:
 
 
 class Enemy:
-    SIZE = 32
+    SIZE           = 32
+    NAME           = ''
+    is_boss        = False
+    STUN_DURATION  = 2.0   # seconds stunned after a dash is parried
 
     def __init__(self, x, y, hp, speed):
         self.x = float(x)
@@ -66,11 +104,13 @@ class Enemy:
         if self.slow_timer > 0:
             self.slow_timer -= dt
 
-    def update(self, player, dt, walls):
-        pass
+    @property
+    def phase_label(self):
+        return ''
 
-    def draw(self, screen, cam_x, cam_y):
-        pass
+    def update(self, player, dt, walls): pass
+
+    def draw(self, screen, cam_x, cam_y): pass
 
     def _sync_rect(self):
         self.rect.topleft = (int(self.x), int(self.y))
@@ -114,6 +154,12 @@ class RangedEnemy(Enemy):
         self.shoot_timer   = random.uniform(0.5, self.SHOOT_COOLDOWN)
         self.strafe_dir    = random.choice([-1, 1])
         self.strafe_timer  = random.uniform(1.0, 2.5)
+        self._sk       = _get_skeleton_frames()
+        self._anim_state = 'idle'
+        self._anim_frame = 0
+        self._anim_timer = 0.0
+        self._anim_fps   = 8
+        self._facing_right = True
 
     # ------------------------------------------------------------------ AI
 
@@ -133,6 +179,13 @@ class RangedEnemy(Enemy):
 
         self._move(dx, dy, dist, dt, walls)
         self._try_shoot(ex, ey, px, py, dist, dt)
+
+        self._anim_timer += dt
+        if self._anim_timer >= 1.0 / self._anim_fps:
+            self._anim_timer -= 1.0 / self._anim_fps
+            frames = self._sk[self._anim_state]
+            self._anim_frame = (self._anim_frame + 1) % len(frames)
+        self._anim_frame = min(self._anim_frame, len(self._sk[self._anim_state]) - 1)
 
         for b in self.bullets:
             b.update(dt, walls)
@@ -154,13 +207,22 @@ class RangedEnemy(Enemy):
         if gap > 60:
             move_x = nx * spd * dt
             move_y = ny * spd * dt
+            new_state = 'run'
         elif gap < -60:
             move_x = -nx * spd * dt
             move_y = -ny * spd * dt
+            new_state = 'run'
         else:
             move_x = perp_x * spd * self.strafe_dir * dt
             move_y = perp_y * spd * self.strafe_dir * dt
+            new_state = 'idle'
 
+        if new_state != self._anim_state:
+            self._anim_state = new_state
+            self._anim_frame = 0
+            self._anim_timer = 0.0
+
+        self._facing_right = dx > 0
         self.x += move_x
         self.y += move_y
         self._sync_rect()
@@ -185,7 +247,13 @@ class RangedEnemy(Enemy):
             return
         sx = int(self.x - cam_x)
         sy = int(self.y - cam_y)
-        pygame.draw.rect(screen, self.COLOR, (sx, sy, self.SIZE, self.SIZE))
+        cx = sx + self.SIZE // 2
+        cy = sy + self.SIZE // 2
+        frame = self._sk[self._anim_state][self._anim_frame]
+        if not self._facing_right:
+            frame = pygame.transform.flip(frame, True, False)
+        fw, fh = frame.get_size()
+        screen.blit(frame, (cx - fw // 2, cy - fh // 2))
         self._draw_hp_bar(screen, cam_x, cam_y)
         for b in self.bullets:
             b.draw(screen, cam_x, cam_y)
@@ -216,6 +284,12 @@ class MeleeEnemy(Enemy):
         self.stun_timer       = 0.0
         self.parry_vulnerable = False
         self.parry_dmg_mult   = 1.5
+        self._frames      = _get_slime_frames()
+        self._anim_frame  = 0
+        self._anim_timer  = 0.0
+        self._anim_fps    = 8
+        self._windup_time = 0.0
+        self._alert_font  = pygame.font.SysFont(None, 28)
 
     def stun(self, duration, dmg_mult=1.5):
         self.state            = 'chase'
@@ -255,6 +329,11 @@ class MeleeEnemy(Enemy):
             self.touch_timer -= dt
 
         if self.state == 'chase':
+            self._windup_time = 0.0
+            self._anim_timer += dt
+            if self._anim_timer >= 1.0 / self._anim_fps:
+                self._anim_timer -= 1.0 / self._anim_fps
+                self._anim_frame  = (self._anim_frame + 1) % len(self._frames)
             self._move_toward(px, py, ex, ey, dist, dt, walls)
             self.dash_cd -= dt
             if dist < self.DASH_RANGE and self.dash_cd <= 0:
@@ -263,6 +342,11 @@ class MeleeEnemy(Enemy):
             self._passive_contact(player)
 
         elif self.state == 'windup':
+            self._windup_time += dt
+            self._anim_timer  += dt
+            if self._anim_timer >= 1.0 / self._anim_fps:
+                self._anim_timer -= 1.0 / self._anim_fps
+                self._anim_frame  = (self._anim_frame + 1) % len(self._frames)
             # Pause and lock onto player before dashing
             self.state_timer -= dt
             if self.state_timer <= 0:
@@ -281,15 +365,22 @@ class MeleeEnemy(Enemy):
             parry_box   = player.get_parry_sword_hitbox()
             blocked     = parry_box is not None and parry_box.colliderect(self.rect)
             if self.rect.colliderect(player.rect) and self.touch_timer <= 0 and not blocked:
-                player.hp       -= self.DASH_DAMAGE
                 self.touch_timer = self.TOUCH_INTERVAL
-                damage_number.spawn(player.x + 16, player.y - 8,
-                                    self.DASH_DAMAGE, damage_number.PLAYER_HIT_COLOR)
+                if player.invulnerable_timer <= 0:
+                    dealt = max(1, self.DASH_DAMAGE - getattr(player, 'defense', 0))
+                    player.hp -= dealt
+                    damage_number.spawn(player.x + 16, player.y - 8,
+                                        dealt, damage_number.PLAYER_HIT_COLOR)
             if self.state_timer <= 0:
                 self.state  = 'cooldown'
                 self.dash_cd = self.DASH_COOLDOWN
 
         elif self.state == 'cooldown':
+            self._windup_time = 0.0
+            self._anim_timer += dt
+            if self._anim_timer >= 1.0 / self._anim_fps:
+                self._anim_timer -= 1.0 / self._anim_fps
+                self._anim_frame  = (self._anim_frame + 1) % len(self._frames)
             self._move_toward(px, py, ex, ey, dist, dt, walls)
             self.dash_cd -= dt
             if self.dash_cd <= 0:
@@ -307,10 +398,11 @@ class MeleeEnemy(Enemy):
 
     def _passive_contact(self, player):
         if self.rect.colliderect(player.rect) and self.touch_timer <= 0:
-            player.hp       -= self.TOUCH_DAMAGE
+            dealt = max(1, self.TOUCH_DAMAGE - getattr(player, 'defense', 0))
+            player.hp       -= dealt
             self.touch_timer = self.TOUCH_INTERVAL
             damage_number.spawn(player.x + 16, player.y - 8,
-                                self.TOUCH_DAMAGE, damage_number.PLAYER_HIT_COLOR)
+                                dealt, damage_number.PLAYER_HIT_COLOR)
 
     # ---------------------------------------------------------------- Draw
 
@@ -319,11 +411,27 @@ class MeleeEnemy(Enemy):
             return
         sx = int(self.x - cam_x)
         sy = int(self.y - cam_y)
-        if self.state == 'windup':
-            color = (255, 200, 80)   # yellow telegraph
-        elif self.state == 'dash':
-            color = (255, 255, 255)  # white flash during dash
+        cx = sx + self.SIZE // 2
+        cy = sy + self.SIZE // 2
+
+        if self.state == 'dash':
+            frame = self._frames[min(2, len(self._frames) - 1)]
+            fw, fh = frame.get_size()
+            screen.blit(frame, (cx - fw // 2, cy - fh // 2))
+        elif self.state == 'windup':
+            scale = 1.0 + 0.15 * math.sin(self._windup_time * 15)
+            frame = self._frames[self._anim_frame]
+            fw = max(1, int(frame.get_width()  * scale))
+            fh = max(1, int(frame.get_height() * scale))
+            scaled = pygame.transform.scale(frame, (fw, fh))
+            ox = random.randint(-3, 3)
+            oy = random.randint(-3, 3)
+            screen.blit(scaled, (cx - fw // 2 + ox, cy - fh // 2 + oy))
+            alert = self._alert_font.render("!", True, (255, 60, 60))
+            screen.blit(alert, (cx - alert.get_width() // 2, sy - fh // 2 - alert.get_height() - 2))
         else:
-            color = self.COLOR
-        pygame.draw.rect(screen, color, (sx, sy, self.SIZE, self.SIZE))
+            frame = self._frames[self._anim_frame]
+            fw, fh = frame.get_size()
+            screen.blit(frame, (cx - fw // 2, cy - fh // 2))
+
         self._draw_hp_bar(screen, cam_x, cam_y)
