@@ -4,7 +4,7 @@ from constants import STEP_X, STEP_Y, ROOM_W, ROOM_H, WALL_T, DOOR_SIZE
 from map_generator import MAP_ROWS, MAP_COLS
 from room import Room
 from enemy import RangedEnemy, MeleeEnemy
-from coin import Coin
+from world_objects import Coin
 from player import Player
 from world import finalize_map
 from shop import Shop
@@ -23,7 +23,7 @@ def serialize_enemy(e):
         base.update({'state': e.state, 'dash_cd': e.dash_cd,
                      'stun_timer': e.stun_timer})
     elif isinstance(e, RangedEnemy):
-        base['shoot_timer'] = e.shoot_timer
+        base['state'] = e.state
     return base
 
 
@@ -96,8 +96,8 @@ def load_game():
         for ed in rd['enemies']:
             if ed['type'] == 'RangedEnemy':
                 e = RangedEnemy(ed['x'], ed['y'], ed['floor_number'])
-                e.hp          = ed['hp']
-                e.shoot_timer = ed.get('shoot_timer', 1.0)
+                e.hp    = ed['hp']
+                e.state = ed.get('state', 'chase')
             else:
                 e = MeleeEnemy(ed['x'], ed['y'], ed['floor_number'])
                 e.hp         = ed['hp']

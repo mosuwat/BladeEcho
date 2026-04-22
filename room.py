@@ -3,12 +3,11 @@ import random
 import os
 from enemy import RangedEnemy, MeleeEnemy
 from boss import SlimeKing
-from coin import Coin
-from gate import Gate
-import damage_number
+from world_objects import Coin, Gate
 import tilemap as tilemap_mod
 from shop import make_floor_items, RARITY_COLOR
-from ui import notify_item
+import ui
+import sound
 
 _TMX_DIR  = os.path.join(os.path.dirname(__file__), 'images')
 _ROOM_TMX = None   # loaded lazily after pygame.init()
@@ -215,8 +214,8 @@ class Room:
         for item in self.items:
             if not item.collected and item.rect.colliderect(player.rect):
                 item.apply(player)
-                notify_item(item.name, item.rarity,
-                            RARITY_COLOR.get(item.rarity, (200, 200, 200)))
+                ui.notify_item(item.name, item.rarity,
+                               RARITY_COLOR.get(item.rarity, (200, 200, 200)))
         self.items = [i for i in self.items if not i.collected]
 
         if not self.is_locked:
@@ -241,7 +240,13 @@ class Room:
                         and hitbox.colliderect(enemy.rect)):
                     dealt = enemy.take_damage(player.sword.damage)
                     player.sword.hit_this_swing.add(id(enemy))
-                    damage_number.spawn(enemy.x + 16, enemy.y - 8, dealt)
+                    ui.spawn(enemy.x + 16, enemy.y - 8, dealt)
+                    if getattr(enemy, 'parry_vulnerable', False):
+                        sound.play('hit_weaken')
+                    elif isinstance(enemy, RangedEnemy):
+                        sound.play('hit_normal')
+                    else:
+                        sound.play('hit_slime')
                     if player.sword.flame:
                         enemy.burn_timer = 3.0
                     if player.sword.slow:
@@ -262,8 +267,8 @@ class Room:
                     if player.invulnerable_timer <= 0:
                         dealt = max(1, bullet.damage - getattr(player, 'defense', 0))
                         player.hp -= dealt
-                        damage_number.spawn(player.x + 16, player.y - 8,
-                                            dealt, damage_number.PLAYER_HIT_COLOR)
+                        ui.spawn(player.x + 16, player.y - 8,
+                                 dealt, ui.PLAYER_HIT_COLOR)
 
         # Player's deflected bullets → update + enemy damage
         for bullet in player.deflected_bullets:
@@ -274,7 +279,7 @@ class Room:
             for enemy in self.enemies:
                 if bullet.rect.colliderect(enemy.rect):
                     dealt = enemy.take_damage(bullet.damage)
-                    damage_number.spawn(enemy.x + 16, enemy.y - 8, dealt)
+                    ui.spawn(enemy.x + 16, enemy.y - 8, dealt)
                     bullet.alive = False
                     break
         player.deflected_bullets = [b for b in player.deflected_bullets if b.alive]

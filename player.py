@@ -4,6 +4,7 @@ import os
 import tilemap as tilemap_mod
 from enemy import Bullet
 from sword import Sword
+import sound
 
 _PLAYER_DIR = os.path.join(os.path.dirname(__file__), 'images', 'player')
 _SCALE      = 2   # 16×32 native → 32×64 display
@@ -101,6 +102,7 @@ class Player:
                      self.sword.damage * 3)
         new.is_deflected = True
         self.deflected_bullets.append(new)
+        sound.play('parry_projectile')
         self._on_parry_success()
         return True
 
@@ -122,6 +124,7 @@ class Player:
             enemy.stun(getattr(enemy, 'STUN_DURATION', 2.0), self.parry_dmg_mult)
             if self.parry_instakill and not getattr(enemy, 'is_boss', False):
                 enemy.take_damage(enemy.hp)
+        sound.play('parry_melee')
         self._on_parry_success()
         return True
 

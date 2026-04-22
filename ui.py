@@ -138,3 +138,118 @@ def make_menu_buttons(font_lg, save_exists_fn):
         Button((cx - w//2, y0 + (h+gap)*2, w, h), "Quit",           font_lg,
                color=(80, 40, 40), hover=(120, 60, 60)),
     ]
+
+
+# ── Damage numbers ────────────────────────────────────────────────────────────
+
+ENEMY_HIT_COLOR  = (255, 230,  80)
+PLAYER_HIT_COLOR = (255,  80,  80)
+
+_dn_active   = []
+_DN_LIFETIME = 0.9
+_DN_RISE_PX  = 55
+
+
+class _DamageNumber:
+    def __init__(self, x, y, value, color):
+        self.x     = float(x)
+        self.y     = float(y)
+        self.value = value
+        self.color = color
+        self.age   = 0.0
+
+    def update(self, dt):
+        self.age += dt
+        self.y   -= (_DN_RISE_PX / _DN_LIFETIME) * dt
+
+    @property
+    def alive(self):
+        return self.age < _DN_LIFETIME
+
+    def draw(self, surface, font, cam_x, cam_y):
+        alpha = max(0, 255 - int(255 * self.age / _DN_LIFETIME))
+        txt = font.render(str(self.value), True, self.color)
+        txt.set_alpha(alpha)
+        surface.blit(txt, txt.get_rect(center=(int(self.x - cam_x),
+                                               int(self.y - cam_y))))
+
+
+def spawn(x, y, value, color=ENEMY_HIT_COLOR):
+    _dn_active.append(_DamageNumber(x, y, value, color))
+
+
+def update_all(dt):
+    global _dn_active
+    for dn in _dn_active:
+        dn.update(dt)
+    _dn_active = [dn for dn in _dn_active if dn.alive]
+
+
+def draw_all(surface, font, cam_x, cam_y):
+    for dn in _dn_active:
+        dn.draw(surface, font, cam_x, cam_y)
+
+
+# ── Minimap ───────────────────────────────────────────────────────────────────
+
+_MM_COLORS = {
+    'start':   ( 50, 200,  50),
+    'monster': (180,  60,  60),
+    'boss':    (220, 100,  20),
+    'shop':    (200, 180,  50),
+    'special': (150,  80, 200),
+    'item':    ( 60, 120, 200),
+    'exit':    (  0, 180, 220),
+}
+
+_MM_CELL = 18
+_MM_GAP  = 3
+_MM_STEP = _MM_CELL + _MM_GAP
+
+
+def draw_minimap(screen, rooms, cur_room, font):
+    from map_generator import MAP_COLS, MAP_ROWS   # lazy — avoids circular import
+    sw, sh = screen.get_size()
+    ox = (sw - MAP_COLS * _MM_STEP) // 2
+    oy = (sh - MAP_ROWS * _MM_STEP) // 2
+
+    overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 190))
+    screen.blit(overlay, (0, 0))
+
+    room_dict = {(r.grid_x, r.grid_y): r for r in rooms}
+
+    def adjacent_visited(room):
+        return any(
+            room_dict.get((nx, ny)) and room_dict[(nx, ny)].visited
+            for nx, ny in room.connections
+        )
+
+    for room in rooms:
+        visited    = room.visited
+        discovered = not visited and adjacent_visited(room)
+        if not visited and not discovered:
+            continue
+
+        rx = ox + room.grid_x * _MM_STEP
+        ry = oy + room.grid_y * _MM_STEP
+        base  = _MM_COLORS.get(room.event_type, (80, 80, 80))
+        color = base if visited else tuple(int(c * 0.4) for c in base)
+
+        for nx, ny in room.connections:
+            nb = room_dict.get((nx, ny))
+            if nb and (nb.visited or adjacent_visited(nb)):
+                pygame.draw.line(screen, (60, 60, 80),
+                                 (rx + _MM_CELL // 2, ry + _MM_CELL // 2),
+                                 (ox + nx * _MM_STEP + _MM_CELL // 2,
+                                  oy + ny * _MM_STEP + _MM_CELL // 2), 2)
+
+        pygame.draw.rect(screen, color, (rx, ry, _MM_CELL, _MM_CELL))
+
+        if room is cur_room:
+            pygame.draw.rect(screen, (255, 255, 255), (rx, ry, _MM_CELL, _MM_CELL), 2)
+            pygame.draw.circle(screen, (255, 255, 255),
+                               (rx + _MM_CELL // 2, ry + _MM_CELL // 2), 3)
+
+    title = font.render("MAP  (M to close)", True, (180, 180, 200))
+    screen.blit(title, title.get_rect(centerx=sw // 2, y=oy - 28))

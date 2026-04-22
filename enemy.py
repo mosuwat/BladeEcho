@@ -3,7 +3,8 @@ import math
 import random
 import os
 import tilemap as tilemap_mod
-import damage_number
+import ui
+import sound
 
 _ENEMY_IMG_DIR   = os.path.join(os.path.dirname(__file__), 'images', 'Enemy')
 _SLIME_FRAMES    = None
@@ -31,10 +32,11 @@ def _sheet_frames(path, frame_w, frame_h):
 def _get_skeleton_frames():
     global _SKELETON_FRAMES
     if _SKELETON_FRAMES is None:
-        base  = os.path.join(_ENEMY_IMG_DIR, 'Skeleton - Base')
-        idle  = [pygame.transform.scale(f, (64, 64))
-                 for f in _sheet_frames(os.path.join(base, 'Idle', 'Idle-Sheet.png'), 32, 32)]
-        run   = _sheet_frames(os.path.join(base, 'Run',  'Run-Sheet.png'),  64, 64)
+        base = os.path.join(_ENEMY_IMG_DIR, 'Skeleton - Base')
+        idle = [pygame.transform.scale(f, (48, 48))
+                for f in _sheet_frames(os.path.join(base, 'Idle', 'Idle-Sheet.png'), 32, 32)]
+        run  = [pygame.transform.scale(f, (96, 96))
+                for f in _sheet_frames(os.path.join(base, 'Run',  'Run-Sheet.png'),  64, 64)]
         _SKELETON_FRAMES = {'idle': idle, 'run': run}
     return _SKELETON_FRAMES
 
@@ -139,29 +141,37 @@ class Enemy:
 
 
 class RangedEnemy(Enemy):
-    COLOR          = (180, 60, 60)
-    PREFERRED_DIST = 380
-    SHOOT_COOLDOWN = 2.0
-    BULLET_SPEED   = 300
-    BULLET_DAMAGE  = 10
+    COLOR         = (180, 60, 60)
+    BULLET_SPEED  = 300
+    BULLET_DAMAGE = 10
     MAX_SHOOT_DIST = 650
+
+    STILL_DUR   = 0.35   # pause before drawing bow
+    CHARGE_DUR  = 0.75   # bow-draw hold
+    SHOOT_DUR   = 0.20   # freeze after firing
+    RETREAT_DUR = 1.60   # walk-away phase
 
     def __init__(self, x, y, floor_number=1):
         hp = 40 + floor_number * 15
         super().__init__(x, y, hp, speed=100)
         self.floor_number  = floor_number
         self.bullets       = []
-        self.shoot_timer   = random.uniform(0.5, self.SHOOT_COOLDOWN)
-        self.strafe_dir    = random.choice([-1, 1])
-        self.strafe_timer  = random.uniform(1.0, 2.5)
-        self._sk       = _get_skeleton_frames()
-        self._anim_state = 'idle'
-        self._anim_frame = 0
-        self._anim_timer = 0.0
-        self._anim_fps   = 8
+        self.state         = 'chase'   # chase | still | charge | shoot | retreat
+        self.state_timer   = 0.0
+        self._sk           = _get_skeleton_frames()
+        self._anim_state   = 'run'
+        self._anim_frame   = 0
+        self._anim_timer   = 0.0
+        self._anim_fps     = 8
         self._facing_right = True
 
     # ------------------------------------------------------------------ AI
+
+    def _set_anim(self, state):
+        if state != self._anim_state:
+            self._anim_state = state
+            self._anim_frame = 0
+            self._anim_timer = 0.0
 
     def update(self, player, dt, walls):
         if not self.alive:
@@ -175,10 +185,60 @@ class RangedEnemy(Enemy):
         ex = self.x + 16
         ey = self.y + 16
         dx, dy = px - ex, py - ey
-        dist = math.hypot(dx, dy)
+        dist   = math.hypot(dx, dy)
+        spd    = self.speed * (0.5 if self.slow_timer > 0 else 1.0)
 
-        self._move(dx, dy, dist, dt, walls)
-        self._try_shoot(ex, ey, px, py, dist, dt)
+        self._facing_right = dx > 0
+
+        if self.state == 'chase':
+            self._set_anim('run')
+            if dist > 0:
+                self.x += dx / dist * spd * dt
+                self.y += dy / dist * spd * dt
+                self._sync_rect()
+                self._push_out_of_walls(walls)
+            if dist <= self.MAX_SHOOT_DIST:
+                self.state       = 'still'
+                self.state_timer = self.STILL_DUR
+
+        elif self.state == 'still':
+            self._set_anim('idle')
+            self.state_timer -= dt
+            if self.state_timer <= 0:
+                self.state       = 'charge'
+                self.state_timer = self.CHARGE_DUR
+
+        elif self.state == 'charge':
+            self._set_anim('idle')
+            self.state_timer -= dt
+            if self.state_timer <= 0:
+                bullet_spd = self.BULLET_SPEED + self.floor_number * 20
+                if dist > 0:
+                    self.bullets.append(
+                        Bullet(ex, ey, dx / dist * bullet_spd, dy / dist * bullet_spd,
+                               self.BULLET_DAMAGE))
+                    sound.play('arrow_shot')
+                self.state       = 'shoot'
+                self.state_timer = self.SHOOT_DUR
+
+        elif self.state == 'shoot':
+            self._set_anim('idle')
+            self.state_timer -= dt
+            if self.state_timer <= 0:
+                self.state       = 'retreat'
+                self.state_timer = self.RETREAT_DUR
+
+        elif self.state == 'retreat':
+            self._set_anim('run')
+            if dist > 0:
+                self.x -= dx / dist * spd * dt
+                self.y -= dy / dist * spd * dt
+                self._sync_rect()
+                self._push_out_of_walls(walls)
+            self.state_timer -= dt
+            if self.state_timer <= 0:
+                self.state       = 'still'
+                self.state_timer = self.STILL_DUR
 
         self._anim_timer += dt
         if self._anim_timer >= 1.0 / self._anim_fps:
@@ -190,55 +250,6 @@ class RangedEnemy(Enemy):
         for b in self.bullets:
             b.update(dt, walls)
         self.bullets = [b for b in self.bullets if b.alive]
-
-    def _move(self, dx, dy, dist, dt, walls):
-        if dist == 0:
-            return
-        spd = self.speed * (0.5 if self.slow_timer > 0 else 1.0)
-        nx, ny = dx / dist, dy / dist       # toward player
-        perp_x, perp_y = -ny, nx            # perpendicular (strafe axis)
-
-        self.strafe_timer -= dt
-        if self.strafe_timer <= 0:
-            self.strafe_dir   = random.choice([-1, 1])
-            self.strafe_timer = random.uniform(1.0, 2.5)
-
-        gap = dist - self.PREFERRED_DIST
-        if gap > 60:
-            move_x = nx * spd * dt
-            move_y = ny * spd * dt
-            new_state = 'run'
-        elif gap < -60:
-            move_x = -nx * spd * dt
-            move_y = -ny * spd * dt
-            new_state = 'run'
-        else:
-            move_x = perp_x * spd * self.strafe_dir * dt
-            move_y = perp_y * spd * self.strafe_dir * dt
-            new_state = 'idle'
-
-        if new_state != self._anim_state:
-            self._anim_state = new_state
-            self._anim_frame = 0
-            self._anim_timer = 0.0
-
-        self._facing_right = dx > 0
-        self.x += move_x
-        self.y += move_y
-        self._sync_rect()
-        self._push_out_of_walls(walls)
-
-    def _try_shoot(self, ex, ey, px, py, dist, dt):
-        self.shoot_timer -= dt
-        if self.shoot_timer > 0 or dist > self.MAX_SHOOT_DIST:
-            return
-        self.shoot_timer = self.SHOOT_COOLDOWN
-        speed = self.BULLET_SPEED + self.floor_number * 20
-        if dist == 0:
-            return
-        vx = (px - ex) / dist * speed
-        vy = (py - ey) / dist * speed
-        self.bullets.append(Bullet(ex, ey, vx, vy, self.BULLET_DAMAGE))
 
     # ---------------------------------------------------------------- Draw
 
@@ -253,7 +264,7 @@ class RangedEnemy(Enemy):
         if not self._facing_right:
             frame = pygame.transform.flip(frame, True, False)
         fw, fh = frame.get_size()
-        screen.blit(frame, (cx - fw // 2, cy - fh // 2))
+        screen.blit(frame, (cx - fw // 2, sy + self.SIZE - fh))
         self._draw_hp_bar(screen, cam_x, cam_y)
         for b in self.bullets:
             b.draw(screen, cam_x, cam_y)
@@ -369,8 +380,8 @@ class MeleeEnemy(Enemy):
                 if player.invulnerable_timer <= 0:
                     dealt = max(1, self.DASH_DAMAGE - getattr(player, 'defense', 0))
                     player.hp -= dealt
-                    damage_number.spawn(player.x + 16, player.y - 8,
-                                        dealt, damage_number.PLAYER_HIT_COLOR)
+                    ui.spawn(player.x + 16, player.y - 8,
+                                     dealt, ui.PLAYER_HIT_COLOR)
             if self.state_timer <= 0:
                 self.state  = 'cooldown'
                 self.dash_cd = self.DASH_COOLDOWN
@@ -401,8 +412,8 @@ class MeleeEnemy(Enemy):
             dealt = max(1, self.TOUCH_DAMAGE - getattr(player, 'defense', 0))
             player.hp       -= dealt
             self.touch_timer = self.TOUCH_INTERVAL
-            damage_number.spawn(player.x + 16, player.y - 8,
-                                dealt, damage_number.PLAYER_HIT_COLOR)
+            ui.spawn(player.x + 16, player.y - 8,
+                     dealt, ui.PLAYER_HIT_COLOR)
 
     # ---------------------------------------------------------------- Draw
 

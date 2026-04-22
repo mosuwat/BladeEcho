@@ -2,7 +2,7 @@ import pygame
 import math
 import random
 from enemy import Enemy, Bullet
-import damage_number
+import ui
 
 
 class GlobBullet(Bullet):
@@ -245,8 +245,8 @@ class SlimeKing(Enemy):
             if self.rect.colliderect(player.rect) and not blocked:
                 dealt = max(1, self.DASH_DAMAGE - getattr(player, 'defense', 0))
                 player.hp -= dealt
-                damage_number.spawn(player.x + 16, player.y - 8,
-                                    dealt, damage_number.PLAYER_HIT_COLOR)
+                ui.spawn(player.x + 16, player.y - 8,
+                         dealt, ui.PLAYER_HIT_COLOR)
 
             if self.state_timer <= 0:
                 ex2 = self.x + self.SIZE // 2
@@ -277,8 +277,8 @@ class SlimeKing(Enemy):
             dealt = max(1, self.TOUCH_DAMAGE - getattr(player, 'defense', 0))
             player.hp -= dealt
             self.touch_timer = self.TOUCH_INTERVAL
-            damage_number.spawn(player.x + 16, player.y - 8,
-                                dealt, damage_number.PLAYER_HIT_COLOR)
+            ui.spawn(player.x + 16, player.y - 8,
+                     dealt, ui.PLAYER_HIT_COLOR)
 
     def _restart_desperate(self):
         self.desp_state           = 'shoot'

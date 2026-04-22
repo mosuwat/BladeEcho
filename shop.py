@@ -69,7 +69,7 @@ def _make_pool():
                  lambda p: setattr(p.sword, 'damage', p.sword.damage + 5),
                  rarity='common'),
 
-        ShopItem("+15 Blade Reach", "Longer blade, bigger hit area.", 4,
+        ShopItem("Bigger Sword", "Your blade grows slightly each purchase (+5% size and reach).", 4,
                  lambda p: p.sword.upgrade(damage_bonus=0, reach_bonus=15),
                  rarity='common'),
 

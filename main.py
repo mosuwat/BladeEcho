@@ -7,13 +7,13 @@ from map_generator import generate_map
 
 from player import Player
 from world import finalize_map, get_camera, current_room, resolve_walls
-import minimap
-import damage_number
 import tilemap as tilemap_mod
+import sound
 from shop import Shop
 from save import SAVE_PATH, save_exists, write_save, load_game
 from ui import Button, make_menu_buttons, draw_hud, draw_boss_bar, \
-               update_notifications, draw_notifications
+               update_notifications, draw_notifications, \
+               draw_minimap, update_all, draw_all
 
 pygame.init()
 screen  = pygame.display.set_mode((SCREEN_W, SCREEN_H))
@@ -185,13 +185,23 @@ while running:
         cur_room.visited = True
         cur_room.try_lock(player.rect)
 
+    if cur_room and cur_room.is_boss:
+        sound.play_music('boss')
+    elif cur_room and cur_room.event_type == 'shop':
+        sound.play_music('shop')
+    elif cur_room and cur_room.is_locked:
+        sound.play_music('fight')
+    else:
+        sound.play_music('normal')
+
     lock_walls   = [w for r in rooms if r.is_locked for w in r.lock_walls]
     active_walls = all_walls + lock_walls
 
     resolve_walls(player, active_walls)
     player.update(dt)
-    damage_number.update_all(dt)
+    update_all(dt)
     update_notifications(dt)
+    sound.update(dt)
     cam_x, cam_y = get_camera(player, SCREEN_W, SCREEN_H)
 
     if player.hp <= 0:
@@ -226,7 +236,7 @@ while running:
         bullet.draw(screen, cam_x, cam_y)
 
     player.draw(screen, cam_x, cam_y)
-    damage_number.draw_all(screen, font_sm, cam_x, cam_y)
+    draw_all(screen, font_sm, cam_x, cam_y)
     draw_notifications(screen, font_md, font_sm)
 
     draw_hud(screen, player, cur_room, floor_num, sublevel, font_md)
@@ -236,7 +246,7 @@ while running:
         draw_boss_bar(screen, cur_room.enemies[0], font_sm)
 
     if show_map:
-        minimap.draw(screen, rooms, cur_room, font_md)
+        draw_minimap(screen, rooms, cur_room, font_md)
 
     if cur_room and cur_room.shop:
         cur_room.shop.draw(screen)

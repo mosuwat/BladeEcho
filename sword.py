@@ -3,9 +3,10 @@ import math
 import os
 import tilemap as tilemap_mod
 
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-_SWORD_TMX = os.path.join(BASE_DIR, 'images', 'weapon', 'sword.tmx')
-_SCALE     = 2
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+_SWORD_TMX  = os.path.join(BASE_DIR, 'images', 'weapon', 'sword.tmx')
+_SCALE      = 2
+_GRIP_DIST  = 8   # pixels from player center to sword grip (fixed)
 
 
 class Sword:
@@ -15,20 +16,23 @@ class Sword:
     def __init__(self, damage=20, reach=70):
         self.damage      = damage
         self.reach       = reach
+        self._base_reach = reach
+        self.scale       = 1.0
         self.parry_pad   = 7      # half-width of parry hitbox
         self.flame       = False  # burn on hit
         self.slow        = False  # slow on hit
         self.execute_pct = 0.0    # instant-kill threshold (fraction of max_hp)
 
-        self.swing_active     = False
-        self.swing_timer      = 0.0
+        self.swing_active      = False
+        self.swing_timer       = 0.0
         self.swing_start_angle = 0.0
-        self.hit_this_swing   = set()   # enemy ids already hit in this swing
+        self.hit_this_swing    = set()   # enemy ids already hit in this swing
 
         frame = tilemap_mod.load(_SWORD_TMX).get_frames(frame_tile_w=1)[0]
         scaled = pygame.transform.scale(frame, (frame.get_width() * _SCALE,
                                                 frame.get_height() * _SCALE))
-        self.image = pygame.transform.flip(pygame.transform.rotate(scaled, 90), True, True)
+        self.img_base = pygame.transform.flip(pygame.transform.rotate(scaled, 90), True, True)
+        self.image    = self.img_base
 
     # ------------------------------------------------------------------
     # API
@@ -45,7 +49,12 @@ class Sword:
 
     def upgrade(self, damage_bonus=5, reach_bonus=0):
         self.damage += damage_bonus
-        self.reach  += reach_bonus
+        if reach_bonus:
+            self.scale += 0.05
+            self.reach  = int(self._base_reach * self.scale)
+            w = int(self.img_base.get_width()  * self.scale)
+            h = int(self.img_base.get_height() * self.scale)
+            self.image = pygame.transform.scale(self.img_base, (w, h))
 
     # ------------------------------------------------------------------
     # Update
@@ -104,7 +113,9 @@ class Sword:
         self._blit_at_angle(screen, cx, cy, cam_x, cam_y, angle)
 
     def _blit_at_angle(self, screen, cx, cy, cam_x, cam_y, angle):
-        rotated  = pygame.transform.rotate(self.image, -math.degrees(angle))
-        center_x = (cx - cam_x) + math.cos(angle) * self.reach / 2
-        center_y = (cy - cam_y) + math.sin(angle) * self.reach / 2
+        rotated    = pygame.transform.rotate(self.image, -math.degrees(angle))
+        sword_len  = max(self.image.get_width(), self.image.get_height())
+        center_dist = _GRIP_DIST + sword_len // 2
+        center_x   = (cx - cam_x) + math.cos(angle) * center_dist
+        center_y   = (cy - cam_y) + math.sin(angle) * center_dist
         screen.blit(rotated, rotated.get_rect(center=(center_x, center_y)))

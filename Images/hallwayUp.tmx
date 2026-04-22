@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <map version="1.10" tiledversion="1.12.0" orientation="orthogonal" renderorder="right-down" width="14" height="16" tilewidth="16" tileheight="16" infinite="0" nextlayerid="6" nextobjectid="1">
- <tileset firstgid="1" source="../../../../Projects/Tileset/0x72_DungeonTilesetII_v1.7/0x72_DungeonTilesetII_v1.7/atlas_walls_low-16x16.tsx"/>
- <tileset firstgid="49" source="../../../../Projects/Tileset/0x72_DungeonTilesetII_v1.7/0x72_DungeonTilesetII_v1.7/0x72_DungeonTilesetII_v1.7.tsx"/>
+ <tileset firstgid="1" source="tilesets/0x72_DungeonTilesetII_v1.7/atlas_walls_low-16x16.tsx"/>
+ <tileset firstgid="49" source="tilesets/0x72_DungeonTilesetII_v1.7/0x72_DungeonTilesetII_v1.7.tsx"/>
  <layer id="3" name="Floors" width="14" height="16">
   <data encoding="csv">
 178,178,178,178,178,178,178,178,178,178,178,178,178,178,
