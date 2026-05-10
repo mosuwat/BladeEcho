@@ -1,16 +1,22 @@
 import pygame
 import random
 import os
+import math
 from enemy import RangedEnemy, MeleeEnemy
-from boss import SlimeKing
-from world_objects import Coin, Gate
+from boss import SlimeKing, BoneArcher, IceBullet, FlameArrow
+from world_objects import Coin
+from shop import Seller, make_floor_items, make_boss_drop, RARITY_COLOR
 import tilemap as tilemap_mod
-from shop import make_floor_items, RARITY_COLOR
 import ui
 import sound
 
+# Debug: set to a boss class to always force that boss, or None for random
+_DEBUG_BOSS = None
+_BOSS_POOL  = [SlimeKing, BoneArcher]
+
 _TMX_DIR  = os.path.join(os.path.dirname(__file__), 'images')
 _ROOM_TMX = None   # loaded lazily after pygame.init()
+_SHOP_TMX = None
 
 def _get_room_tmx():
     global _ROOM_TMX
@@ -18,12 +24,37 @@ def _get_room_tmx():
         _ROOM_TMX = tilemap_mod.load(os.path.join(_TMX_DIR, 'map.tmx'))
     return _ROOM_TMX
 
+def _get_shop_tmx():
+    global _SHOP_TMX
+    if _SHOP_TMX is None:
+        _SHOP_TMX = tilemap_mod.load(os.path.join(_TMX_DIR, 'map_shop.tmx'))
+    return _SHOP_TMX
+
 EVENT_WEIGHTS = {
     'monster': 70,
     'item':    10,
     'shop':    15,
-    'special': 5,
 }
+
+
+class Gate:
+    SIZE = 80
+
+    def __init__(self, x, y):
+        self.x    = float(x)
+        self.y    = float(y)
+        self.rect = pygame.Rect(int(x) - self.SIZE // 2, int(y) - self.SIZE // 2,
+                                self.SIZE, self.SIZE)
+        path = os.path.join(_TMX_DIR, 'placeholder.png')
+        raw  = pygame.image.load(path).convert_alpha()
+        self.image = pygame.transform.scale(raw, (self.SIZE, self.SIZE))
+
+    def draw(self, screen, cam_x, cam_y):
+        sx = int(self.x - cam_x) - self.SIZE // 2
+        sy = int(self.y - cam_y) - self.SIZE // 2
+        screen.blit(self.image, (sx, sy))
+        pygame.draw.rect(screen, (0, 200, 255),
+                         (sx - 3, sy - 3, self.SIZE + 6, self.SIZE + 6), 3)
 
 FLOOR_COLOR = (45, 45, 50)
 WALL_COLOR  = (80, 80, 120)
@@ -51,6 +82,8 @@ class Room:
         self.floor_coins = []
         self.gate        = None
         self.shop        = None
+        self.seller      = None
+        self._boss_death_pos = None
         self.visited     = is_start
         self.connections = set()
 
@@ -71,6 +104,8 @@ class Room:
         self.wall_t, self.door_size = wall_t, door_size
         self.walls      = self._build_walls()
         self.lock_walls = self._build_lock_walls()
+        if self.event_type == 'shop':
+            self.seller = Seller(wx + room_w // 2, wy + room_h // 2)
 
     def _build_walls(self):
         wx, wy = self.wx, self.wy
@@ -167,9 +202,15 @@ class Room:
             self.enemies.append(cls(ex, ey, floor_number))
 
     def _spawn_boss(self, wx, wy, room_w, room_h, floor_number):
-        self.enemies.append(SlimeKing(wx + room_w // 2 - SlimeKing.SIZE // 2,
-                                      wy + room_h // 2 - SlimeKing.SIZE // 2,
-                                      floor_number))
+        cls  = _DEBUG_BOSS if _DEBUG_BOSS is not None else random.choice(_BOSS_POOL)
+        boss = cls(wx + room_w // 2 - cls.SIZE // 2,
+                   wy + room_h // 2 - cls.SIZE // 2,
+                   floor_number)
+        if hasattr(boss, '_room_connections'):
+            boss._room_connections = self.connections
+            boss._room_grid_x      = self.grid_x
+            boss._room_grid_y      = self.grid_y
+        self.enemies.append(boss)
 
     # ------------------------------------------------------------------
     # State
@@ -187,8 +228,11 @@ class Room:
             self.is_locked = True
 
     def place_gate(self):
-        cx = self.wx + self.room_w // 2
-        cy = self.wy + self.room_h // 2
+        if self._boss_death_pos:
+            cx, cy = self._boss_death_pos
+        else:
+            cx = self.wx + self.room_w // 2
+            cy = self.wy + self.room_h // 2
         self.gate = Gate(cx, cy)
 
     def clear(self):
@@ -196,6 +240,17 @@ class Room:
         self.is_locked  = False
         if self.is_boss:
             self.place_gate()
+            gx, gy   = self.gate.x, self.gate.y
+            cx       = self.wx + self.room_w // 2
+            cy       = self.wy + self.room_h // 2
+            dx, dy   = cx - gx, cy - gy
+            dist     = math.hypot(dx, dy) or 1
+            margin   = self.wall_t + 20
+            ix = max(self.wx + margin, min(self.wx + self.room_w - margin,
+                                           gx + dx / dist * 100))
+            iy = max(self.wy + margin, min(self.wy + self.room_h - margin,
+                                           gy + dy / dist * 100))
+            self.items.append(make_boss_drop(ix, iy))
 
     # ------------------------------------------------------------------
     # Update  (call only for the room the player is currently in)
@@ -207,6 +262,7 @@ class Room:
         for coin in self.floor_coins:
             if coin.rect.colliderect(player.rect):
                 player.coins += 1
+                sound.play('coin_collect')
             else:
                 remaining.append(coin)
         self.floor_coins = remaining
@@ -214,6 +270,7 @@ class Room:
         for item in self.items:
             if not item.collected and item.rect.colliderect(player.rect):
                 item.apply(player)
+                sound.play('collect_floor')
                 ui.notify_item(item.name, item.rarity,
                                RARITY_COLOR.get(item.rarity, (200, 200, 200)))
         self.items = [i for i in self.items if not i.collected]
@@ -230,6 +287,8 @@ class Room:
         for enemy in self.enemies:
             if not enemy.alive:
                 self.floor_coins += Coin.drop_at(enemy.x + 16, enemy.y + 16)
+                if self.is_boss:
+                    self._boss_death_pos = (enemy.x + 16, enemy.y + 16)
         self.enemies = [e for e in self.enemies if e.alive]
 
         # Sword hit → enemies
@@ -237,7 +296,8 @@ class Room:
         if hitbox:
             for enemy in self.enemies:
                 if (id(enemy) not in player.sword.hit_this_swing
-                        and hitbox.colliderect(enemy.rect)):
+                        and hitbox.colliderect(enemy.rect)
+                        and not player._counter_swing):
                     dealt = enemy.take_damage(player.sword.damage)
                     player.sword.hit_this_swing.add(id(enemy))
                     ui.spawn(enemy.x + 16, enemy.y - 8, dealt)
@@ -249,8 +309,9 @@ class Room:
                         sound.play('hit_slime')
                     if player.sword.flame:
                         enemy.burn_timer = 3.0
+                        enemy.burn_dps   = player.sword.damage * 0.5
                     if player.sword.slow:
-                        enemy.slow_timer = 2.0
+                        enemy.slow_timer = 4.0
                     if (player.sword.execute_pct > 0 and enemy.alive
                             and enemy.hp / enemy.max_hp < player.sword.execute_pct):
                         enemy.take_damage(enemy.hp)
@@ -261,6 +322,8 @@ class Room:
                 if not bullet.alive:
                     continue
                 if player.try_parry_bullet(bullet):
+                    if isinstance(bullet, FlameArrow) and player.deflected_bullets:
+                        player.deflected_bullets[-1]._homing_target = enemy
                     continue
                 if bullet.rect.colliderect(player.rect):
                     bullet.alive = False
@@ -269,6 +332,8 @@ class Room:
                         player.hp -= dealt
                         ui.spawn(player.x + 16, player.y - 8,
                                  dealt, ui.PLAYER_HIT_COLOR)
+                        if isinstance(bullet, IceBullet):
+                            player.slow_timer = 3.0
 
         # Player's deflected bullets → update + enemy damage
         for bullet in player.deflected_bullets:
@@ -278,9 +343,16 @@ class Room:
                 continue
             for enemy in self.enemies:
                 if bullet.rect.colliderect(enemy.rect):
-                    dealt = enemy.take_damage(bullet.damage)
-                    ui.spawn(enemy.x + 16, enemy.y - 8, dealt)
                     bullet.alive = False
+                    if isinstance(bullet, FlameArrow) and hasattr(enemy, 'take_flame_hit'):
+                        enemy.take_flame_hit()
+                    else:
+                        dealt = enemy.take_damage(bullet.damage)
+                        ui.spawn(enemy.x + 16, enemy.y - 8, dealt)
+                        if getattr(enemy, 'stun_on_deflect', False) and hasattr(enemy, 'stun'):
+                            enemy.stun(getattr(enemy, 'STUN_DURATION', 2.0))
+                        elif isinstance(bullet, IceBullet) and hasattr(enemy, 'stun') and enemy.alive:
+                            enemy.stun(getattr(enemy, 'STUN_DURATION', 2.0))
                     break
         player.deflected_bullets = [b for b in player.deflected_bullets if b.alive]
 
@@ -300,7 +372,7 @@ class Room:
 
         _SKIP = ('DoorsTop', 'DoorsBottom', 'DoorsLeft', 'DoorsRight',
                  'WallsTop', 'WallsBottom', 'WallsLeft', 'WallsRight')
-        tmx = _get_room_tmx()
+        tmx = _get_shop_tmx() if self.event_type == 'shop' else _get_room_tmx()
         screen.blit(tmx.render(self.room_w, self.room_h, skip_layers=_SKIP), (sx, sy))
 
         connected = {(nx - self.grid_x, ny - self.grid_y) for nx, ny in self.connections}
@@ -311,6 +383,8 @@ class Room:
             else:
                 screen.blit(tmx.render_layer(wall_layer, self.room_w, self.room_h), (sx, sy))
 
+        if self.seller:
+            self.seller.draw(screen, cam_x, cam_y)
 
         for coin in self.floor_coins:
             coin.draw(screen, cam_x, cam_y)
@@ -326,7 +400,6 @@ class Room:
 
     # ------------------------------------------------------------------
 
-    def is_special(self): return self.event_type == 'special'
     def is_shop(self):    return self.event_type == 'shop'
 
     def __repr__(self):

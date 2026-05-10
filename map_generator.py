@@ -94,21 +94,18 @@ def generate_map(is_boss_sublevel=True):
     else:
         exit_room.event_type = 'exit'
 
-    # Assign event types to remaining rooms, capping shop ≤ 2 and special ≤ 2
+    # Assign event types to remaining rooms, capping shop ≤ 2 and item ≤ 2
     regular = [r for r in placed if not r.is_start and r is not exit_room]
     random.shuffle(regular)
-    shop_count    = 0
-    special_count = 0
-    item_count    = 0
+    shop_count = 0
+    item_count = 0
     for room in regular:
         weights = dict(EVENT_WEIGHTS)
-        if shop_count    >= 2: weights.pop('shop',    None)
-        if special_count >= 2: weights.pop('special', None)
-        if item_count    >= 2: weights.pop('item',    None)
+        if shop_count >= 2: weights.pop('shop', None)
+        if item_count >= 2: weights.pop('item', None)
         event = random.choices(list(weights), weights=weights.values(), k=1)[0]
         room.event_type = event
-        if event == 'shop':    shop_count    += 1
-        if event == 'special': special_count += 1
-        if event == 'item':    item_count    += 1
+        if event == 'shop': shop_count += 1
+        if event == 'item': item_count += 1
 
     return placed, start_room, grid

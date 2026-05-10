@@ -38,6 +38,7 @@ def write_save(player, rooms, floor_num, sublevel):
             'is_start':    room.is_start,
             'is_locked':   room.is_locked,
             'is_cleared':  room.is_cleared,
+            'visited':     room.visited,
             'connections': [list(c) for c in room.connections],
             'enemies':     [serialize_enemy(e) for e in room.enemies],
             'floor_coins': [{'x': c.x, 'y': c.y} for c in room.floor_coins],
@@ -54,7 +55,6 @@ def write_save(player, rooms, floor_num, sublevel):
             'parry_instakill':       player.parry_instakill,
             'sword_damage':          player.sword.damage,
             'sword_reach':           player.sword.reach,
-            'sword_parry_pad':       player.sword.parry_pad,
             'sword_flame':           player.sword.flame,
             'sword_slow':            player.sword.slow,
             'sword_execute_pct':     player.sword.execute_pct,
@@ -72,7 +72,7 @@ def read_save():
         return json.load(f)
 
 
-def load_game():
+def load_game(tmx_h, tmx_v):
     """Return (rooms, start_room, grid, floor_num, sublevel, player,
                hallway_floors, hall_walls, all_walls)."""
     data  = read_save()
@@ -85,6 +85,7 @@ def load_game():
                     is_boss=rd['is_boss'], is_start=rd['is_start'])
         room.is_locked   = rd['is_locked']
         room.is_cleared  = rd['is_cleared']
+        room.visited     = rd.get('visited', room.is_start)
         room.connections = {tuple(c) for c in rd['connections']}
         wx = room.grid_x * STEP_X
         wy = room.grid_y * STEP_Y
@@ -109,7 +110,7 @@ def load_game():
             room.floor_coins.append(Coin(cd['x'], cd['y']))
 
     start_room = next(r for r in rooms if r.is_start)
-    hallway_floors, hall_walls, all_walls = finalize_map(rooms)
+    hallway_floors, hall_walls, all_walls = finalize_map(rooms, tmx_h, tmx_v)
 
     floor_num = data.get('floor_num', 1)
     sublevel  = data.get('sublevel',  1)
@@ -122,7 +123,7 @@ def load_game():
     pd = data['player']
     player = Player(pd['x'], pd['y'], speed=300)
     player.hp     = pd['hp']
-    player.max_hp = pd.get('max_hp', 100)
+    player.max_hp = pd.get('max_hp', 10)
     player.coins  = pd['coins']
     player.parry_window          = pd.get('parry_window',          0.15)
     player.parry_dmg_mult        = pd.get('parry_dmg_mult',        1.5)
@@ -131,7 +132,6 @@ def load_game():
     player.parry_instakill       = pd.get('parry_instakill',       False)
     player.sword.damage      = pd.get('sword_damage',      20)
     player.sword.reach       = pd.get('sword_reach',       70)
-    player.sword.parry_pad   = pd.get('sword_parry_pad',   7)
     player.sword.flame       = pd.get('sword_flame',       False)
     player.sword.slow        = pd.get('sword_slow',        False)
     player.sword.execute_pct = pd.get('sword_execute_pct', 0.0)

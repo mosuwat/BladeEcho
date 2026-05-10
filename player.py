@@ -2,9 +2,10 @@ import pygame
 import math
 import os
 import tilemap as tilemap_mod
-from enemy import Bullet
+
 from sword import Sword
 import sound
+import stats
 
 _PLAYER_DIR = os.path.join(os.path.dirname(__file__), 'images', 'player')
 _SCALE      = 2   # 16×32 native → 32×64 display
@@ -22,8 +23,8 @@ class Player:
     def __init__(self, x, y, speed = 200):
         self.x = x
         self.y = y
-        self.max_hp = 100
-        self.hp     = 100
+        self.max_hp = 10
+        self.hp     = 10
         self.speed  = speed
         self.parry_active            = False
         self.parry_timer             = 0
@@ -37,12 +38,14 @@ class Player:
         self.parry_instakill         = False
         self.invulnerable_timer      = 0.0
         self.defense                 = 0
+        self.slow_timer              = 0.0
         self.facing_angle = 0.0
         self.rect  = pygame.Rect(x, y, 32, 32)
         self.coins = 0
         self.deflected_bullets = []
         self.sword = Sword(damage=20, reach=50)
         self._counter_swing = False
+        self._parry_hit     = False   # True once a parry succeeds this window
         self._parry_font = pygame.font.SysFont(None, 20)
 
         self._anims      = {'walk': _load_anim('Walk.tmx'), 'idle': _load_anim('Idle.tmx')}
@@ -54,6 +57,8 @@ class Player:
 
     def handle_input(self, keys, dt, cam_x=0, cam_y=0):
         spd = self.speed * (1.5 if self.parry_speed_boost_timer > 0 else 1.0)
+        if self.slow_timer > 0:
+            spd *= 0.5
         if keys[pygame.K_w]:
             self.y -= spd * dt
         if keys[pygame.K_s]:
@@ -70,8 +75,8 @@ class Player:
         world_cy = self.y + 16
         self.facing_angle = math.atan2((my + cam_y) - world_cy, (mx + cam_x) - world_cx)
 
-    PARRY_FWD   = 18
-    PARRY_RIGHT = 20
+    PARRY_FWD   = 16
+    PARRY_RIGHT = 1
     PARRY_ANGLE_OFFSET = -math.pi / 3
 
     def get_parry_sword_hitbox(self):
@@ -88,18 +93,19 @@ class Player:
         if not self.parry_active or bullet.is_deflected:
             return False
         hitbox = self.get_parry_sword_hitbox()
-        if hitbox is None or not hitbox.colliderect(bullet.rect):
+        if not bullet.rect.colliderect(self.rect) and (hitbox is None or not hitbox.colliderect(bullet.rect)):
             return False
         speed = math.hypot(bullet.vx, bullet.vy)
         pcx   = self.x + 16
         pcy   = self.y + 16
         dist  = math.hypot(bullet.x - pcx, bullet.y - pcy)
         bullet.alive = False   # destroy the incoming bullet
-        new = Bullet(pcx + math.cos(self.facing_angle) * dist,
-                     pcy + math.sin(self.facing_angle) * dist,
-                     math.cos(self.facing_angle) * speed * 2,
-                     math.sin(self.facing_angle) * speed * 2,
-                     self.sword.damage * 3)
+        new = type(bullet)(pcx + math.cos(self.facing_angle) * dist,
+                           pcy + math.sin(self.facing_angle) * dist,
+                           math.cos(self.facing_angle) * speed * 2,
+                           math.sin(self.facing_angle) * speed * 2,
+                           self.sword.damage * 3,
+                           image=bullet.image)
         new.is_deflected = True
         self.deflected_bullets.append(new)
         sound.play('parry_projectile')
@@ -114,7 +120,7 @@ class Player:
         if not is_dash and not is_fall:
             return False
         hitbox = self.get_parry_sword_hitbox()
-        if hitbox is None or not hitbox.colliderect(enemy.rect):
+        if not enemy.rect.colliderect(self.rect) and (hitbox is None or not hitbox.colliderect(enemy.rect)):
             return False
         if is_fall:
             if hasattr(enemy, 'parry_slam'):
@@ -129,15 +135,18 @@ class Player:
         return True
 
     def _on_parry_success(self):
-        self.parry_active   = False
-        self.parry_timer    = 0
-        self.parry_cooldown = 0
-        self.sword.swing(self.facing_angle)
-        self._counter_swing = True
-        if self.parry_heal_pct > 0:
-            self.hp = min(self.hp + int(self.max_hp * self.parry_heal_pct), self.max_hp)
-        if self.parry_speed_boost_dur > 0:
-            self.parry_speed_boost_timer = self.parry_speed_boost_dur
+        # Keep parry_active=True so remaining bullets in the same frame are deflected.
+        # Only apply effects on the first hit of this parry window.
+        if not self._parry_hit:
+            self._parry_hit     = True
+            self.parry_cooldown = 0
+            self.sword.swing(self.facing_angle)
+            self._counter_swing = True
+            if self.parry_heal_pct > 0:
+                self.hp = min(self.hp + int(self.max_hp * self.parry_heal_pct), self.max_hp)
+            if self.parry_speed_boost_dur > 0:
+                self.parry_speed_boost_timer = self.parry_speed_boost_dur
+            stats.recorder.log_parry_success()
 
     def swing_sword(self):
         if self.parry_active:
@@ -155,20 +164,26 @@ class Player:
         self._counter_swing = False
         self.sword.swing_active = False
         self.parry_active = True
-        self.parry_timer = self.parry_window
+        self.parry_timer  = self.parry_window
         self.parry_cooldown = self.parry_cooldown_duration
+        self._parry_hit   = False
 
     def update(self, dt):
         if self.parry_active:
             self.parry_timer -= dt
             if self.parry_timer <= 0:
                 self.parry_active = False
+                if not self._parry_hit:
+                    stats.recorder.log_parry_miss()
+                self._parry_hit = False
         if self.parry_cooldown > 0:
             self.parry_cooldown -= dt
         if self.parry_speed_boost_timer > 0:
             self.parry_speed_boost_timer -= dt
         if self.invulnerable_timer > 0:
             self.invulnerable_timer -= dt
+        if self.slow_timer > 0:
+            self.slow_timer -= dt
         self.sword.update(dt)
 
         state = 'walk' if self._moving else 'idle'
@@ -193,26 +208,13 @@ class Player:
         screen.blit(frame, (sx + 16 - fw // 2, sy + 32 - fh))
 
         cx = sx + 16
-        cy = sy + 16
-        length = 20
-        end = (cx + math.cos(self.facing_angle) * length,
-               cy + math.sin(self.facing_angle) * length)
-        #pygame.draw.line(screen, (255, 255, 0), (cx, cy), end, 3)
-
-        if self.parry_active:
-            radius = 40
-            arc_rect = pygame.Rect(cx - radius, cy - radius, radius * 2, radius * 2)
-            spread = math.radians(45)
-            arc_start = -self.facing_angle - spread
-            arc_end   = -self.facing_angle + spread
-            #pygame.draw.arc(screen, (0, 100, 255), arc_rect, arc_start, arc_end, 3)
 
         if self.parry_active:
             right_angle = self.facing_angle + math.pi / 2
-            hx = self.x + 16 + math.cos(self.facing_angle) * 18 + math.cos(right_angle) * 20
-            hy = self.y + 16 + math.sin(self.facing_angle) * 18 + math.sin(right_angle) * 20
-            self.sword.draw_at_angle(screen, hx, hy,
-                                     cam_x, cam_y, self.facing_angle - math.pi / 3)
+            hx = self.x + 16 + math.cos(self.facing_angle) * self.PARRY_FWD + math.cos(right_angle) * self.PARRY_RIGHT
+            hy = self.y + 16 + math.sin(self.facing_angle) * self.PARRY_FWD + math.sin(right_angle) * self.PARRY_RIGHT
+            self.sword.draw_parry_centered(screen, hx, hy,
+                                          cam_x, cam_y, self.facing_angle - math.pi / 3)
         else:
             self.sword.draw(screen, self.x + 16, self.y + 16, cam_x, cam_y)
 

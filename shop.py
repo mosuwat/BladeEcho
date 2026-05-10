@@ -1,8 +1,13 @@
 import pygame
 import random
 import math
+import os
 from constants import SCREEN_W, SCREEN_H
 from ui import notify_item
+import stats
+import sound
+
+_SHOP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 CARD_W   = 160
@@ -35,7 +40,7 @@ RARITY_COLOR  = {
 # ── Item definition ───────────────────────────────────────────────────────────
 
 class ShopItem:
-    def __init__(self, name, desc, price, effect, rarity='common', max_uses=None):
+    def __init__(self, name, desc, price, effect, rarity='common', max_uses=None, category='other'):
         self.name     = name
         self.desc     = desc
         self.price    = price
@@ -43,6 +48,7 @@ class ShopItem:
         self.rarity   = rarity
         self.max_uses = max_uses
         self.uses     = 0
+        self.category = category
 
     @property
     def sold_out(self):
@@ -54,12 +60,15 @@ class ShopItem:
         player.coins -= self.price
         self._effect(player)
         self.uses += 1
+        stats.recorder.log_purchase(self.category, self.price)
+        sound.play('shop_buy')
         return True
 
 
 def _guaranteed():
-    return ShopItem("+20 HP", "Restore 20 health points.", 3,
-                    lambda p: setattr(p, 'hp', min(p.hp + 20, p.max_hp)))
+    return ShopItem("+2 Hearts", "Restore 2 hearts.", 3,
+                    lambda p: setattr(p, 'hp', min(p.hp + 2, p.max_hp)),
+                    category='healing')
 
 
 def _make_pool():
@@ -67,65 +76,61 @@ def _make_pool():
         # common ──────────────────────────────────────────────────────────
         ShopItem("+5 Sword Dmg",   "Blade deals more damage.", 4,
                  lambda p: setattr(p.sword, 'damage', p.sword.damage + 5),
-                 rarity='common'),
+                 rarity='common', max_uses=random.randint(2, 3), category='sword'),
 
         ShopItem("Bigger Sword", "Your blade grows slightly each purchase (+5% size and reach).", 4,
                  lambda p: p.sword.upgrade(damage_bonus=0, reach_bonus=15),
-                 rarity='common'),
+                 rarity='common', max_uses=random.randint(2, 3), category='sword'),
 
-        ShopItem("+20 Max HP", "Increase maximum health by 20.", 5,
-                 lambda p: (setattr(p, 'max_hp', p.max_hp + 20),
-                            setattr(p, 'hp',     p.hp     + 20)),
-                 rarity='common'),
+        ShopItem("+1 Max Heart", "Grow your maximum hearts by 1.", 5,
+                 lambda p: (setattr(p, 'max_hp', p.max_hp + 1),
+                            setattr(p, 'hp',     p.hp     + 1)),
+                 rarity='common', max_uses=random.randint(2, 3), category='healing'),
 
         # rare ────────────────────────────────────────────────────────────
         ShopItem("Wider Parry",    "Parry window lasts 50 ms longer.", 5,
                  lambda p: setattr(p, 'parry_window',
                                    round(p.parry_window + 0.05, 3)),
-                 rarity='rare'),
-
-        ShopItem("Bigger Parry Box", "Parry hitbox catches attacks from further away.", 5,
-                 lambda p: setattr(p.sword, 'parry_pad', p.sword.parry_pad + 5),
-                 rarity='rare'),
+                 rarity='rare', max_uses=1, category='parry'),
 
         ShopItem("Parry Weaken +", "Weakened enemies take 20% more bonus damage.", 6,
                  lambda p: setattr(p, 'parry_dmg_mult',
                                    round(p.parry_dmg_mult + 0.2, 2)),
-                 rarity='rare'),
+                 rarity='rare', max_uses=1, category='parry'),
 
-        ShopItem("Iron Skin", "Reduce all incoming damage by 3.", 7,
-                 lambda p: setattr(p, 'defense', getattr(p, 'defense', 0) + 3),
-                 rarity='rare'),
+        ShopItem("Iron Skin", "Reduce all incoming damage by 1.", 7,
+                 lambda p: setattr(p, 'defense', getattr(p, 'defense', 0) + 1),
+                 rarity='rare', max_uses=1, category='other'),
 
         # epic ────────────────────────────────────────────────────────────
         ShopItem("Swift Parry",  "Gain a 1.5x speed burst for 2 s after each parry.", 8,
                  lambda p: setattr(p, 'parry_speed_boost_dur', 2.0),
-                 rarity='epic', max_uses=1),
+                 rarity='epic', max_uses=1, category='parry'),
 
         ShopItem("Life Steal",   "Recover 10% max HP on each successful parry.", 9,
                  lambda p: setattr(p, 'parry_heal_pct',
                                    round(p.parry_heal_pct + 0.10, 2)),
-                 rarity='epic', max_uses=1),
+                 rarity='epic', max_uses=1, category='parry'),
 
         # legendary ───────────────────────────────────────────────────────
         ShopItem("Parry Execute", "Instantly kill the attacker on parry (not bosses).", 14,
                  lambda p: setattr(p, 'parry_instakill', True),
-                 rarity='legendary', max_uses=1),
+                 rarity='legendary', max_uses=1, category='parry'),
 
         ShopItem("Execute",      "Instantly kill enemies below 20% HP on sword hit.", 13,
                  lambda p: setattr(p.sword, 'execute_pct', 0.20),
-                 rarity='epic', max_uses=1),
+                 rarity='epic', max_uses=1, category='sword'),
 
         # legendary ───────────────────────────────────────────────────────
         ShopItem("Flame Blade",  "Hits ignite enemies. Replaces Frost Blade.", 12,
                  lambda p: (setattr(p.sword, 'flame', True),
                             setattr(p.sword, 'slow',  False)),
-                 rarity='legendary', max_uses=1),
+                 rarity='legendary', max_uses=1, category='sword'),
 
         ShopItem("Frost Blade",  "Hits slow enemies. Replaces Flame Blade.", 12,
                  lambda p: (setattr(p.sword, 'slow',  True),
                             setattr(p.sword, 'flame', False)),
-                 rarity='legendary', max_uses=1),
+                 rarity='legendary', max_uses=1, category='sword'),
     ]
 
 
@@ -209,6 +214,20 @@ class Shop:
             screen.blit(name_surf, name_surf.get_rect(centerx=rect.centerx, y=oy + 24))
 
             self._wrap_text(screen, item.desc, rect.centerx, oy + 50, CARD_W - 16)
+
+            if item.max_uses is None:
+                stock_text = "Stock: ∞"
+                stock_col  = (140, 220, 140)
+            elif item.sold_out:
+                stock_text = "Stock: 0"
+                stock_col  = _DIM
+            else:
+                remaining  = item.max_uses - item.uses
+                stock_text = f"Stock: {remaining}"
+                stock_col  = (200, 200, 120) if remaining == 1 else (140, 220, 140)
+            stock_surf = self._font_desc.render(stock_text, True, stock_col)
+            screen.blit(stock_surf, stock_surf.get_rect(centerx=rect.centerx,
+                                                         y=oy + CARD_H - 50))
 
             if item.sold_out:
                 price_surf = self._font_price.render("SOLD OUT", True, _DIM)
@@ -300,3 +319,45 @@ def make_floor_items(cx, cy, floor_num, count=1):
     xs = [cx] if count == 1 else [cx - spread * i + spread * (count - 1) // 2
                                    for i in range(count)]
     return [_pick_floor_item(x, cy, floor_num) for x in xs]
+
+
+def make_boss_drop(cx, cy):
+    pool   = [item for item in _make_pool() if item.rarity in ('rare', 'epic')]
+    picked = random.choice(pool)
+    return FloorItem(cx, cy, picked)
+
+
+# ── Seller NPC ────────────────────────────────────────────────────────────────
+
+_seller_frames = None
+_SELLER_W      = 32
+_SELLER_H      = 64
+_SELLER_FPS    = 8.0
+
+
+def _get_seller_frames():
+    global _seller_frames
+    if _seller_frames is None:
+        import tilemap as tilemap_mod
+        path = os.path.join(_SHOP_DIR, 'Images', 'Npc', 'Seller.tmx')
+        tmx  = tilemap_mod.load(path)
+        raw  = tmx.get_frames(frame_tile_w=1)
+        _seller_frames = [pygame.transform.scale(f, (_SELLER_W, _SELLER_H)) for f in raw]
+    return _seller_frames
+
+
+class Seller:
+    W, H = _SELLER_W, _SELLER_H
+
+    def __init__(self, cx, cy):
+        self.cx = cx
+        self.cy = cy
+
+    def draw(self, screen, cam_x, cam_y):
+        frames = _get_seller_frames()
+        if not frames:
+            return
+        idx = int(pygame.time.get_ticks() / 1000.0 * _SELLER_FPS) % len(frames)
+        sx  = int(self.cx - cam_x) - self.W // 2 + 16
+        sy  = int(self.cy - cam_y) - self.H // 2
+        screen.blit(frames[idx], (sx, sy))

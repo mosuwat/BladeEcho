@@ -1,7 +1,9 @@
 import pygame
 import os
+import json
 
 _DIR           = os.path.join(os.path.dirname(__file__), 'Sound')
+_SETTINGS_PATH = os.path.join(os.path.dirname(__file__), 'settings.json')
 _sounds        = {}
 _current_music = None
 _pending_music = None
@@ -13,6 +15,55 @@ _FADE_IN_MS  = 800
 
 SFX_VOL   = 1.0   # 0.0 – 1.0
 MUSIC_VOL = 0.5   # 0.0 – 1.0
+
+
+def load_settings():
+    global SFX_VOL, MUSIC_VOL
+    try:
+        with open(_SETTINGS_PATH) as f:
+            data = json.load(f)
+        SFX_VOL   = max(0.0, min(1.0, float(data.get('sfx_vol',   1.0))))
+        MUSIC_VOL = max(0.0, min(1.0, float(data.get('music_vol', 0.5))))
+    except Exception:
+        pass
+
+
+def save_settings():
+    try:
+        with open(_SETTINGS_PATH, 'w') as f:
+            json.dump({'sfx_vol': SFX_VOL, 'music_vol': MUSIC_VOL}, f)
+    except Exception:
+        pass
+
+
+def set_sfx_volume(vol):
+    global SFX_VOL
+    SFX_VOL = max(0.0, min(1.0, round(vol, 2)))
+    for snd in _sounds.values():
+        snd.set_volume(SFX_VOL)
+
+
+def set_music_volume(vol):
+    global MUSIC_VOL
+    MUSIC_VOL = max(0.0, min(1.0, round(vol, 2)))
+    try:
+        pygame.mixer.music.set_volume(MUSIC_VOL)
+    except Exception:
+        pass
+
+
+def stop_music():
+    global _current_music, _pending_music, _fading_out, _fade_timer
+    pygame.mixer.music.stop()
+    _current_music = None
+    _pending_music = None
+    _fading_out    = False
+    _fade_timer    = 0.0
+
+
+def stop_all():
+    stop_music()
+    pygame.mixer.stop()
 
 
 def _trim_sound(path, skip_seconds):
@@ -52,6 +103,9 @@ def _load():
     s('hit_weaken',        'hit/weakenHit.mp3')
     s('parry_melee',       'parry/Meleeparry.mp3')
     st('parry_projectile', 'parry/ProjectileParry.mp3', 1.0)
+    s('coin_collect',      'collectitem/coin_collect.mp3')
+    s('collect_floor',     'collectitem/collect_on_floor.mp3')
+    s('shop_buy',          'collectitem/shop_buy.mp3')
 
 
 def play(name):

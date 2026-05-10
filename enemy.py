@@ -5,10 +5,49 @@ import os
 import tilemap as tilemap_mod
 import ui
 import sound
+import stats
 
 _ENEMY_IMG_DIR   = os.path.join(os.path.dirname(__file__), 'images', 'Enemy')
 _SLIME_FRAMES    = None
 _SKELETON_FRAMES = None   # {'idle': [...], 'run': [...]}
+_BOW_FRAMES      = None   # [undrawn, mid-draw, full-draw]
+_ARROW_SURF      = None   # single nocked-arrow sprite
+_FLAME_FRAMES    = None   # pre-scaled animated flame overlay frames
+_FROST_FRAMES    = None   # pre-scaled frost sparkle frames (particle size)
+
+_FLAME_FPS       = 10
+_FLAME_CELL      = 16
+_FROST_FPS           = 10
+_FROST_CELL          = 64
+_FROST_PARTICLE_SIZE = 16
+_FROST_SPAWN_RATE    = 8    # particles per second
+_FROST_LIFE          = 0.8  # seconds per particle
+
+
+def _get_flame_frames(size):
+    global _FLAME_FRAMES
+    if _FLAME_FRAMES is None:
+        path  = os.path.join(os.path.dirname(__file__), 'images', 'Debuff', 'flamme.png')
+        sheet = pygame.image.load(path).convert_alpha()
+        cols  = sheet.get_width() // _FLAME_CELL
+        raw   = [sheet.subsurface(_FLAME_CELL * i, 0, _FLAME_CELL, _FLAME_CELL)
+                 for i in range(cols)]
+        _FLAME_FRAMES = [pygame.transform.scale(f, (size, size)) for f in raw]
+    return _FLAME_FRAMES
+
+
+def _get_frost_frames():
+    global _FROST_FRAMES
+    if _FROST_FRAMES is None:
+        path  = os.path.join(os.path.dirname(__file__), 'images', 'Debuff', 'frost.png')
+        sheet = pygame.image.load(path).convert_alpha()
+        cols  = sheet.get_width()  // _FROST_CELL
+        rows  = sheet.get_height() // _FROST_CELL
+        raw   = [sheet.subsurface(_FROST_CELL * c, _FROST_CELL * r, _FROST_CELL, _FROST_CELL)
+                 for r in range(rows) for c in range(cols)]
+        _FROST_FRAMES = [pygame.transform.scale(f, (_FROST_PARTICLE_SIZE, _FROST_PARTICLE_SIZE))
+                         for f in raw]
+    return _FROST_FRAMES
 
 
 def _get_slime_frames():
@@ -41,15 +80,35 @@ def _get_skeleton_frames():
     return _SKELETON_FRAMES
 
 
+def _get_bow_frames():
+    global _BOW_FRAMES
+    if _BOW_FRAMES is None:
+        path = os.path.join(os.path.dirname(__file__), 'images', 'Weapon', 'bow.tmx')
+        raw  = tilemap_mod.load(path).get_frames(frame_tile_w=1)
+        _BOW_FRAMES = [pygame.transform.scale(f, (f.get_width() * 1.75, f.get_height() * 1.75))
+                       for f in raw]
+    return _BOW_FRAMES
+
+
+def _get_arrow_surf():
+    global _ARROW_SURF
+    if _ARROW_SURF is None:
+        path = os.path.join(os.path.dirname(__file__), 'images', 'Weapon', 'arrow.tmx')
+        raw  = tilemap_mod.load(path).get_frames(frame_tile_w=1)[0]
+        _ARROW_SURF = pygame.transform.scale(raw, (raw.get_width() * 2, raw.get_height() * 2))
+    return _ARROW_SURF
+
+
 class Bullet:
     RADIUS = 5
 
-    def __init__(self, x, y, vx, vy, damage):
+    def __init__(self, x, y, vx, vy, damage, image=None):
         self.x = float(x)
         self.y = float(y)
         self.vx = vx
         self.vy = vy
         self.damage = damage
+        self.image = image
         self.is_deflected = False
         self.alive = True
         self.rect = pygame.Rect(int(x) - self.RADIUS, int(y) - self.RADIUS,
@@ -65,9 +124,15 @@ class Bullet:
                 return
 
     def draw(self, screen, cam_x, cam_y):
-        color = (0, 200, 255) if self.is_deflected else (255, 210, 60)
-        pygame.draw.circle(screen, color,
-                           (int(self.x - cam_x), int(self.y - cam_y)), self.RADIUS)
+        sx = int(self.x - cam_x)
+        sy = int(self.y - cam_y)
+        if self.image is not None:
+            angle = math.atan2(self.vy, self.vx)
+            rotated = pygame.transform.rotate(self.image, -math.degrees(angle))
+            screen.blit(rotated, rotated.get_rect(center=(sx, sy)))
+        else:
+            color = (0, 200, 255) if self.is_deflected else (255, 210, 60)
+            pygame.draw.circle(screen, color, (sx, sy), self.RADIUS)
 
 
 class Enemy:
@@ -85,26 +150,60 @@ class Enemy:
         self.alive = True
         self.rect = pygame.Rect(int(x), int(y), self.SIZE, self.SIZE)
         self.bullets    = []
-        self.burn_timer = 0.0   # seconds remaining of burn DoT
-        self.slow_timer = 0.0   # seconds remaining of slow debuff
+        self.burn_timer  = 0.0   # seconds remaining of burn DoT
+        self.burn_dps    = 0.0   # damage per second while burning
+        self.slow_timer  = 0.0   # seconds remaining of slow debuff
+        self._burn_accum    = 0.0   # damage accumulated since last tick display
+        self._burn_tick     = 0.0   # countdown to next damage number
+        self._frost_particles = []  # list of [x, y, vx, vy, life, anim_t]
+        self._frost_spawn_acc = 0.0
 
     def take_damage(self, amount):
+        actual = min(amount, max(0, self.hp))
         self.hp -= amount
         if self.hp <= 0:
             self.hp = 0
             self.alive = False
+            if not self.is_boss:
+                stats.recorder.log_kill()
+        stats.recorder.log_damage(actual)
         return amount
+
+    _BURN_TICK = 0.5
 
     def _apply_status(self, dt):
         """Call at the top of each subclass update(). Handles burn and slow timers."""
         if self.burn_timer > 0:
             self.burn_timer -= dt
-            self.hp -= 3 * dt
-            if self.hp <= 0:
-                self.hp = 0
-                self.alive = False
+            if not getattr(self, 'invulnerable', False):
+                dmg               = self.burn_dps * dt
+                self.hp          -= dmg
+                self._burn_accum += dmg
+                self._burn_tick  -= dt
+                if self._burn_tick <= 0:
+                    self._burn_tick = self._BURN_TICK
+                    shown = int(self._burn_accum)
+                    if shown > 0:
+                        ui.spawn(self.x + 16, self.y - 8, shown, (255, 120, 0))
+                    self._burn_accum = 0.0
+                if self.hp <= 0:
+                    self.hp = 0
+                    self.alive = False
         if self.slow_timer > 0:
             self.slow_timer -= dt
+            self._frost_spawn_acc += dt
+            interval = 1.0 / _FROST_SPAWN_RATE
+            while self._frost_spawn_acc >= interval:
+                self._frost_spawn_acc -= interval
+                px = self.x + random.uniform(0, self.SIZE)
+                py = self.y + random.uniform(0, self.SIZE)
+                vx = random.uniform(-25, 25)
+                vy = random.uniform(-80, -35)
+                self._frost_particles.append([px, py, vx, vy, _FROST_LIFE, 0.0])
+        self._frost_particles = [
+            [p[0] + p[2] * dt, p[1] + p[3] * dt, p[2], p[3], p[4] - dt, p[5] + dt]
+            for p in self._frost_particles if p[4] - dt > 0
+        ]
 
     @property
     def phase_label(self):
@@ -131,6 +230,26 @@ class Enemy:
                 self.y -= ot if ot < ob else -ob
             self._sync_rect()
 
+    def _draw_flame(self, screen, cam_x, cam_y):
+        if self.burn_timer <= 0:
+            return
+        frames = _get_flame_frames(self.SIZE)
+        idx    = (pygame.time.get_ticks() // (1000 // _FLAME_FPS)) % len(frames)
+        sx     = int(self.x - cam_x)
+        sy     = int(self.y - cam_y)
+        screen.blit(frames[idx], (sx, sy), special_flags=pygame.BLEND_ADD)
+
+    def _draw_frost(self, screen, cam_x, cam_y):
+        if not self._frost_particles:
+            return
+        frames = _get_frost_frames()
+        half   = _FROST_PARTICLE_SIZE // 2
+        for px, py, _, _, life, anim_t in self._frost_particles:
+            idx   = int(anim_t * _FROST_FPS) % len(frames)
+            frame = frames[idx].copy()
+            frame.set_alpha(int(255 * (life / _FROST_LIFE)))
+            screen.blit(frame, (int(px - cam_x) - half, int(py - cam_y) - half))
+
     def _draw_hp_bar(self, screen, cam_x, cam_y):
         sx = int(self.x - cam_x)
         sy = int(self.y - cam_y)
@@ -143,13 +262,13 @@ class Enemy:
 class RangedEnemy(Enemy):
     COLOR         = (180, 60, 60)
     BULLET_SPEED  = 300
-    BULLET_DAMAGE = 10
+    BULLET_DAMAGE = 1
     MAX_SHOOT_DIST = 650
 
     STILL_DUR   = 0.35   # pause before drawing bow
     CHARGE_DUR  = 0.75   # bow-draw hold
     SHOOT_DUR   = 0.20   # freeze after firing
-    RETREAT_DUR = 1.60   # walk-away phase
+    RETREAT_DUR = 0.70   # walk-away phase
 
     def __init__(self, x, y, floor_number=1):
         hp = 40 + floor_number * 15
@@ -159,11 +278,15 @@ class RangedEnemy(Enemy):
         self.state         = 'chase'   # chase | still | charge | shoot | retreat
         self.state_timer   = 0.0
         self._sk           = _get_skeleton_frames()
+        self._bow          = _get_bow_frames()
+        self._arrow        = _get_arrow_surf()
         self._anim_state   = 'run'
         self._anim_frame   = 0
         self._anim_timer   = 0.0
         self._anim_fps     = 8
-        self._facing_right = True
+        self._facing_right  = True
+        self._aim_angle     = 0.0   # radians toward player, kept for draw
+        self._retreat_perp  = 0     # perpendicular strafe side when wall-stuck: -1, 0, or 1
 
     # ------------------------------------------------------------------ AI
 
@@ -189,6 +312,7 @@ class RangedEnemy(Enemy):
         spd    = self.speed * (0.5 if self.slow_timer > 0 else 1.0)
 
         self._facing_right = dx > 0
+        self._aim_angle    = math.atan2(dy, dx)
 
         if self.state == 'chase':
             self._set_anim('run')
@@ -216,7 +340,7 @@ class RangedEnemy(Enemy):
                 if dist > 0:
                     self.bullets.append(
                         Bullet(ex, ey, dx / dist * bullet_spd, dy / dist * bullet_spd,
-                               self.BULLET_DAMAGE))
+                               self.BULLET_DAMAGE, image=self._arrow))
                     sound.play('arrow_shot')
                 self.state       = 'shoot'
                 self.state_timer = self.SHOOT_DUR
@@ -259,15 +383,54 @@ class RangedEnemy(Enemy):
         sx = int(self.x - cam_x)
         sy = int(self.y - cam_y)
         cx = sx + self.SIZE // 2
-        cy = sy + self.SIZE // 2
         frame = self._sk[self._anim_state][self._anim_frame]
         if not self._facing_right:
             frame = pygame.transform.flip(frame, True, False)
         fw, fh = frame.get_size()
         screen.blit(frame, (cx - fw // 2, sy + self.SIZE - fh))
+        self._draw_bow(screen, cam_x, cam_y)
+        self._draw_flame(screen, cam_x, cam_y)
+        self._draw_frost(screen, cam_x, cam_y)
         self._draw_hp_bar(screen, cam_x, cam_y)
         for b in self.bullets:
             b.draw(screen, cam_x, cam_y)
+
+    def _draw_bow(self, screen, cam_x, cam_y):
+        if self.state in ('chase', 'retreat'):
+            return
+
+        if self.state == 'still':
+            frame_idx = 0
+        elif self.state == 'charge':
+            progress  = 1.0 - (self.state_timer / self.CHARGE_DUR)
+            frame_idx = min(len(self._bow) - 1, int(progress * len(self._bow)))
+        else:  # shoot — fully drawn for the brief freeze, then arrow is gone
+            frame_idx = len(self._bow) - 1
+
+        cx = int(self.x + 16 - cam_x)
+        cy = int(self.y + 16 - cam_y)
+        hold_dist = 10
+        bx = cx + int(math.cos(self._aim_angle) * hold_dist)
+        by = cy + int(math.sin(self._aim_angle) * hold_dist)
+
+        # Bow: sprite baseline points up; add 90° CCW so frame 0 faces right at aim_angle=0
+        bow_rot = pygame.transform.rotate(self._bow[frame_idx],
+                                          -math.degrees(self._aim_angle))
+        screen.blit(bow_rot, bow_rot.get_rect(center=(bx, by)))
+
+        # Arrow nocked while drawing, hidden once shot fires.
+        # Nock sits on the string; as the bow is drawn the string pulls back.
+        if self.state in ('still', 'charge'):
+            progress  = (1.0 - self.state_timer / self.CHARGE_DUR) if self.state == 'charge' else 0.0
+            pull_back = 6 * progress          # max 6 px rearward along aim axis
+            half_len  = self._arrow.get_width() // 2
+            # nock position retreats opposite to aim; arrow center is half_len ahead of nock
+            fwd = half_len - pull_back
+            arrow_cx  = bx + int(math.cos(self._aim_angle) * fwd)
+            arrow_cy  = by + int(math.sin(self._aim_angle) * fwd)
+            arrow_rot = pygame.transform.rotate(self._arrow,
+                                                -math.degrees(self._aim_angle))
+            screen.blit(arrow_rot, arrow_rot.get_rect(center=(arrow_cx, arrow_cy)))
 
 
 class MeleeEnemy(Enemy):
@@ -278,8 +441,8 @@ class MeleeEnemy(Enemy):
     WINDUP_DUR     = 0.45   # pause before dash
     DASH_DUR       = 0.22   # duration of dash burst
     DASH_COOLDOWN  = 2.2
-    DASH_DAMAGE    = 18
-    TOUCH_DAMAGE   = 6
+    DASH_DAMAGE    = 1
+    TOUCH_DAMAGE   = 1
     TOUCH_INTERVAL = 0.8    # seconds between passive contact hits
 
     def __init__(self, x, y, floor_number=1):
@@ -308,6 +471,7 @@ class MeleeEnemy(Enemy):
         self.dash_vx          = 0.0
         self.dash_vy          = 0.0
         self.stun_timer       = duration
+        self.dash_cd          = self.DASH_COOLDOWN
         self.parry_vulnerable = True
         self.parry_dmg_mult   = dmg_mult
 
@@ -445,4 +609,6 @@ class MeleeEnemy(Enemy):
             fw, fh = frame.get_size()
             screen.blit(frame, (cx - fw // 2, cy - fh // 2))
 
+        self._draw_flame(screen, cam_x, cam_y)
+        self._draw_frost(screen, cam_x, cam_y)
         self._draw_hp_bar(screen, cam_x, cam_y)

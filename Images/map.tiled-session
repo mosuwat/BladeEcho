@@ -1,8 +1,28 @@
 {
-    "activeFile": "",
+    "activeFile": "map.tmx",
     "expandedProjectPaths": [
+        ".",
+        "tilesets/0x72_DungeonTilesetII_v1.7",
+        "Npc",
+        "tilesets"
     ],
     "fileStates": {
+        "Enemy/RangedBoss/idle.tmx": {
+            "scale": 23,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 3.5217391304347885,
+                "y": 7.521739130434785
+            }
+        },
+        "Enemy/RangedBoss/walk.tmx": {
+            "scale": 22.384375,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 31.986597794220305,
+                "y": 7.817953371492393
+            }
+        },
         "Enemy/Slime/idle.tmx": {
             "scale": 11,
             "selectedLayer": 0,
@@ -11,12 +31,60 @@
                 "y": 10.909090909090914
             }
         },
+        "Enemy/SlimeBoss/dash.tmx": {
+            "scale": 11.1921875,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 63.97319558844061,
+                "y": 15.993298897110158
+            }
+        },
+        "Enemy/SlimeBoss/move.tmx": {
+            "scale": 11.1921875,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 63.97319558844061,
+                "y": 15.993298897110158
+            }
+        },
+        "Icons/Coin.tmx": {
+            "scale": 32,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 6.75,
+                "y": 7.96875
+            }
+        },
+        "Icons/Coin_Spin.tmx": {
+            "scale": 16,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 1.9375,
+                "y": 2.75
+            }
+        },
+        "Icons/Hearts.tmx": {
+            "scale": 29.84583333333333,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 23.989948345665226,
+                "y": 8.007817953371493
+            }
+        },
+        "Npc/Seller.tmx": {
+            "scale": 16,
+            "selectedLayer": 0,
+            "viewCenter": {
+                "x": 30.25,
+                "y": 15.96875
+            }
+        },
         "Player/Idle.tmx": {
             "scale": 8,
             "selectedLayer": 0,
             "viewCenter": {
                 "x": -60,
-                "y": -30.75
+                "y": -7.875
             }
         },
         "Player/Walk.tmx": {
@@ -27,12 +95,16 @@
                 "y": 9.545454545454547
             }
         },
+        "Weapon/Wood.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
+        },
         "Weapon/arrow.tmx": {
             "scale": 45,
             "selectedLayer": 0,
             "viewCenter": {
                 "x": 7.444444444444445,
-                "y": 8.088888888888889
+                "y": 11.244444444444445
             }
         },
         "Weapon/bow.tmx": {
@@ -40,7 +112,7 @@
             "selectedLayer": 0,
             "viewCenter": {
                 "x": 29.0625,
-                "y": 15.5625
+                "y": 10.4375
             }
         },
         "Weapon/sword.tmx": {
@@ -63,29 +135,69 @@
             "scale": 3,
             "selectedLayer": 3,
             "viewCenter": {
-                "x": 152,
-                "y": 111.66666666666664
+                "x": 112,
+                "y": 128.16666666666666
             }
         },
         "map.tmx": {
             "scale": 2,
-            "selectedLayer": 5,
+            "selectedLayer": 9,
             "viewCenter": {
-                "x": 251.5,
-                "y": 232.5
+                "x": 594,
+                "y": 384.5
             }
+        },
+        "map_shop.tmx": {
+            "scale": 2,
+            "selectedLayer": 1,
+            "viewCenter": {
+                "x": 240,
+                "y": 239.75
+            }
+        },
+        "tilesets/0x72_DungeonTilesetII_v1.7/0x72_DungeonTilesetII_v1.7.tsx": {
+            "scaleInDock": 1.5
+        },
+        "tilesets/0x72_DungeonTilesetII_v1.7/atlas_walls_low-16x16.tsx": {
+            "scaleInDock": 1
+        },
+        "tilesets/Enchanted Forest Characters with animations.tsx": {
+            "scaleInDock": 0.75,
+            "scaleInEditor": 3
+        },
+        "tilesets/PixelCrawler/Weapons/Wood/Wood.tsx": {
+            "scaleInDock": 1
+        },
+        "tilesets/Wood.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
         }
     },
-    "last.imagePath": "G:/MO_WORK/Computer/Projects/Tileset/Pixel Crawler - Free Pack 2.0.4/Pixel Crawler - Free Pack/Weapons/Wood",
+    "last.externalTilesetPath": "G:/MO_WORK/Computer/KU/SKE/BladeEcho/Images/tilesets",
+    "last.imagePath": "G:/MO_WORK/Computer/KU/SKE/BladeEcho/Images/tilesets/dungeontiles-extended v1.1",
     "map.height": 1,
     "map.lastUsedFormat": "tmx",
     "map.tileHeight": 16,
     "map.tileWidth": 16,
     "map.width": 1,
     "openFiles": [
+        "map_shop.tmx",
+        "hallwayUp.tmx",
+        "tilesets/Wood.tsx",
+        "Npc/Seller.tmx",
+        "tilesets/Enchanted Forest Characters with animations.tsx",
+        "map.tmx"
     ],
     "project": "map.tiled-project",
     "recentFiles": [
+        "Weapon/bow.tmx",
+        "map_shop.tmx",
+        "hallwayUp.tmx",
+        "tilesets/Wood.tsx",
+        "Npc/Seller.tmx",
+        "tilesets/Enchanted Forest Characters with animations.tsx",
+        "map.tmx",
+        "Weapon/Wood.tsx"
     ],
     "tileset.lastUsedFormat": "tsx",
     "tileset.tileSize": {
